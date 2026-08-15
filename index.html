@@ -1,0 +1,1302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Teleprompter</title>
+<meta name="description" content="A voice-activated teleprompter that runs entirely in your browser.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127908;</text></svg>">
+<style>
+  :root{
+    --ui-bg:#14161a; --ui-bg2:#1c1f26; --ui-line:#2b303b; --ui-fg:#e7eaf0; --ui-dim:#98a1b3;
+    --ui-accent:#4c8dff; --radius:8px;
+
+    /* prompter (driven by JS) */
+    --tp-bg:#000; --tp-fg:#fff; --tp-accent:#ff4d4d;
+    --tp-size:64px; --tp-lh:1.5; --tp-ls:0px; --tp-align:left;
+    --tp-width:80%; --tp-pad:4%; --tp-weight:400; --tp-transform:none;
+    --tp-font: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --readline:35%;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--ui-bg); color:var(--ui-fg); overflow:hidden;
+    font:14px/1.45 ui-sans-serif,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-text-size-adjust:100%;
+  }
+  button,input,select,textarea{font:inherit;color:inherit}
+  button{cursor:pointer}
+  #app{display:flex;flex-direction:column;height:100%}
+
+  /* ---------- top bar ---------- */
+  .topbar{
+    display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+    padding:8px 10px;background:var(--ui-bg2);border-bottom:1px solid var(--ui-line);
+    padding-top:max(8px,env(safe-area-inset-top));
+  }
+  .brand{font-weight:700;letter-spacing:.4px;margin-right:6px;white-space:nowrap}
+  .brand span{color:var(--ui-accent)}
+  .btn{
+    background:#252a34;border:1px solid var(--ui-line);border-radius:var(--radius);
+    padding:7px 11px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;
+  }
+  .btn:hover{background:#2e3440}
+  .btn.on{background:var(--ui-accent);border-color:var(--ui-accent);color:#fff}
+  .btn.rec.on{background:#e5484d;border-color:#e5484d}
+  .btn.primary{background:#2f9e5e;border-color:#2f9e5e;color:#fff;min-width:104px;justify-content:center}
+  .btn.primary:hover{filter:brightness(1.08)}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .spacer{flex:1 1 auto}
+  .kbd{font:11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ui-dim)}
+
+  /* ---------- layout ---------- */
+  .main{flex:1 1 auto;display:flex;min-height:0}
+  #panel{
+    width:322px;flex:0 0 322px;overflow-y:auto;background:var(--ui-bg2);
+    border-right:1px solid var(--ui-line);padding:12px 12px 40px;
+  }
+  #panel[hidden]{display:none}
+  .stage{flex:1 1 auto;display:flex;flex-direction:column;min-width:0;min-height:0}
+  #editorWrap{
+    flex:0 0 34%;display:flex;flex-direction:column;border-top:1px solid var(--ui-line);
+    background:var(--ui-bg2);min-height:0;
+  }
+  #editorWrap[hidden]{display:none}
+  #editorWrap .ehead{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--ui-line)}
+  #editor{
+    flex:1 1 auto;width:100%;resize:none;border:0;outline:0;padding:10px 12px;
+    background:#0f1116;color:#dfe4ee;font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+
+  /* ---------- settings panel ---------- */
+  .group{border:1px solid var(--ui-line);border-radius:var(--radius);margin-bottom:10px;background:#191d24}
+  .group>summary{
+    padding:9px 11px;cursor:pointer;font-weight:600;list-style:none;
+    display:flex;justify-content:space-between;align-items:center;
+  }
+  .group>summary::-webkit-details-marker{display:none}
+  .group>summary::after{content:"▾";color:var(--ui-dim);transition:transform .15s}
+  .group[open]>summary::after{transform:rotate(180deg)}
+  .group .body{padding:4px 11px 12px;border-top:1px solid var(--ui-line)}
+  .row{display:flex;align-items:center;gap:8px;margin:9px 0}
+  .row>label{flex:0 0 92px;color:var(--ui-dim);font-size:12.5px}
+  .row .val{flex:0 0 52px;text-align:right;color:var(--ui-dim);font:12px ui-monospace,Menlo,monospace}
+  input[type=range]{flex:1 1 auto;min-width:0;accent-color:var(--ui-accent)}
+  input[type=color]{width:38px;height:28px;padding:0;border:1px solid var(--ui-line);border-radius:6px;background:none}
+  select,input[type=text],input[type=number]{
+    background:#0f1116;border:1px solid var(--ui-line);border-radius:6px;padding:6px 8px;flex:1 1 auto;min-width:0;
+  }
+  .seg{display:flex;gap:4px;flex:1 1 auto}
+  .seg button{flex:1;padding:6px 4px;background:#252a34;border:1px solid var(--ui-line);border-radius:6px;font-size:12px}
+  .seg button.on{background:var(--ui-accent);border-color:var(--ui-accent);color:#fff}
+  .chk{display:flex;align-items:center;gap:8px;margin:8px 0;font-size:13px}
+  .chk input{width:16px;height:16px;accent-color:var(--ui-accent)}
+  .swatches{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .swatches button{width:30px;height:24px;border-radius:5px;border:1px solid var(--ui-line);font-size:10px}
+  .hint{color:var(--ui-dim);font-size:11.5px;margin:6px 0 0}
+  .lib{max-height:168px;overflow:auto;margin-top:8px;border:1px solid var(--ui-line);border-radius:6px}
+  .lib .item{display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--ui-line)}
+  .lib .item:last-child{border-bottom:0}
+  .lib .item span{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+  .lib .item button{background:none;border:0;color:var(--ui-dim);padding:2px 4px}
+  .lib .item button:hover{color:#e5484d}
+
+  /* ---------- prompter ---------- */
+  #viewport{
+    position:relative;flex:1 1 auto;min-height:0;overflow:hidden;
+    background:var(--tp-bg);color:var(--tp-fg);touch-action:none;cursor:grab;
+  }
+  #viewport.dragging{cursor:grabbing}
+  #flip{position:absolute;inset:0;transform-origin:center center;will-change:transform}
+  #track{position:absolute;left:0;right:0;top:0;will-change:transform}
+  #script{
+    width:var(--tp-width);margin:0 auto;padding:0 var(--tp-pad);
+    font-family:var(--tp-font);font-size:var(--tp-size);line-height:var(--tp-lh);
+    letter-spacing:var(--tp-ls);font-weight:var(--tp-weight);text-transform:var(--tp-transform);
+    text-align:var(--tp-align);
+    overflow-wrap:break-word;word-break:break-word;   /* long words must never clip off-screen */
+  }
+  #script .line{min-height:1em}
+  #script .blank{height:.65em}
+  #script .h{font-weight:800;opacity:.72;font-size:.62em;letter-spacing:.08em;text-transform:uppercase;margin:.6em 0 .2em}
+  #script .marker{
+    font-size:.34em;letter-spacing:.14em;opacity:.7;color:var(--tp-accent);
+    border:2px dashed currentColor;border-radius:.4em;display:inline-block;padding:.12em .5em;margin:.35em 0;
+  }
+  #script .w.spoken{opacity:.42}
+  #script .w.here{color:var(--tp-accent)}
+  #readline{
+    position:absolute;left:0;right:0;top:var(--readline);height:0;pointer-events:none;
+    border-top:2px solid var(--tp-accent);opacity:.5;
+  }
+  #readline::before,#readline::after{
+    content:"";position:absolute;top:-9px;border:9px solid transparent;
+    border-top-width:8px;border-bottom-width:8px;
+  }
+  #readline::before{left:0;border-left-color:var(--tp-accent)}
+  #readline::after{right:0;border-right-color:var(--tp-accent)}
+  .fade{position:absolute;left:0;right:0;height:14%;pointer-events:none}
+  .fade.t{top:0;background:linear-gradient(var(--tp-bg),transparent)}
+  .fade.b{bottom:0;background:linear-gradient(transparent,var(--tp-bg))}
+  #overlay{
+    position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:10px;background:rgba(0,0,0,.72);backdrop-filter:blur(2px);z-index:5;
+  }
+  #overlay[hidden]{display:none}
+  #ovNum{font-size:min(34vh,240px);line-height:1;font-weight:800;font-variant-numeric:tabular-nums}
+  #ovLabel{font-size:min(4vh,26px);letter-spacing:.22em;text-transform:uppercase;opacity:.75}
+
+  /* ---------- status bar ---------- */
+  .status{
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    padding:6px 10px;background:var(--ui-bg2);border-top:1px solid var(--ui-line);
+    font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ui-dim);
+    padding-bottom:max(6px,env(safe-area-inset-bottom));
+  }
+  .status b{color:var(--ui-fg);font-weight:600}
+  #progress{flex:1 1 120px;height:5px;min-width:80px;background:#2b303b;border-radius:3px;overflow:hidden}
+  #progress i{display:block;height:100%;width:0;background:var(--ui-accent)}
+  #heard{color:var(--ui-accent);max-width:34ch;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+
+  .toast{
+    position:fixed;left:50%;bottom:26px;transform:translateX(-50%);
+    background:#0f1116;border:1px solid var(--ui-line);border-radius:999px;padding:9px 18px;
+    z-index:50;opacity:0;transition:opacity .2s;pointer-events:none;box-shadow:0 6px 22px rgba(0,0,0,.5);
+  }
+  .toast.show{opacity:1}
+
+  body.present .topbar,body.present #panel,body.present .status,body.present #editorWrap{display:none}
+  body.zen .topbar,body.zen #panel,body.zen .status,body.zen #editorWrap{display:none}
+  @media (max-width:860px){
+    #panel{position:absolute;z-index:20;top:0;bottom:0;left:0;width:min(322px,88vw);flex-basis:auto;box-shadow:0 0 40px rgba(0,0,0,.6)}
+    .brand{display:none}
+    #editorWrap{flex-basis:44%}
+  }
+  @media (max-width:560px){
+    .topbar{gap:4px;padding:6px}
+    .btn{padding:6px 9px;font-size:13px}
+    #btnPresent{display:none}          /* a second screen makes no sense on a phone */
+    #jump{flex:1 1 100%;max-width:none!important}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <header class="topbar">
+    <div class="brand">TELE<span>PROMPTER</span></div>
+    <button class="btn primary" id="btnPlay" title="Play / Pause (Space)">▶ Start</button>
+    <button class="btn" id="btnReset" title="Back to top (R)">⭯ Top</button>
+    <button class="btn rec" id="btnVoice" title="Voice activation (V)">🎙 Voice</button>
+    <button class="btn" id="btnMirror" title="Mirror horizontally (M)">⇄ Mirror</button>
+    <button class="btn" id="btnEdit" title="Edit script (E)">✎ Edit</button>
+    <button class="btn" id="btnPanel" title="Settings (S)">⚙ Settings</button>
+    <span class="spacer"></span>
+    <select id="jump" title="Jump to section" style="max-width:170px;display:none"></select>
+    <button class="btn" id="btnPresent" title="Open a synced second screen">⧉ 2nd screen</button>
+    <button class="btn" id="btnFull" title="Fullscreen (F)">⛶ Full</button>
+  </header>
+
+  <div class="main">
+    <aside id="panel" hidden>
+
+      <details class="group" open>
+        <summary>Script</summary>
+        <div class="body">
+          <div class="row">
+            <button class="btn" id="btnOpen" style="flex:1">📂 Upload file</button>
+            <button class="btn" id="btnPaste" style="flex:1">📋 Paste</button>
+          </div>
+          <input type="file" id="file" accept=".txt,.md,.markdown,.text,.rtf,.htm,.html,.csv,.srt,.vtt,.docx" hidden>
+          <div class="row">
+            <button class="btn" id="btnNew" style="flex:1">＋ New</button>
+            <button class="btn" id="btnSave" style="flex:1">💾 Save</button>
+            <button class="btn" id="btnExport" style="flex:1">⭳ .txt</button>
+          </div>
+          <div class="lib" id="lib"></div>
+          <p class="hint">Drag &amp; drop a file anywhere. Supports .txt .md .html .rtf .srt .vtt .docx — or just paste.
+          Lines starting with <code>#</code> become section headings; a line reading <code>[pause]</code> stops the scroll there.</p>
+        </div>
+      </details>
+
+      <details class="group" open>
+        <summary>Text</summary>
+        <div class="body">
+          <div class="row"><label>Size</label><input type="range" id="sFont" min="16" max="200" step="1"><span class="val" id="vFont"></span></div>
+          <div class="row"><label>Line height</label><input type="range" id="sLh" min="1" max="3" step="0.05"><span class="val" id="vLh"></span></div>
+          <div class="row"><label>Letter space</label><input type="range" id="sLs" min="-2" max="12" step="0.5"><span class="val" id="vLs"></span></div>
+          <div class="row"><label>Font</label>
+            <select id="sFam">
+              <option value="sans">Sans (system)</option>
+              <option value="serif">Serif</option>
+              <option value="mono">Monospace</option>
+              <option value="cond">Condensed</option>
+              <option value="round">Rounded / dyslexia-friendly</option>
+            </select>
+          </div>
+          <div class="row"><label>Align</label>
+            <div class="seg" id="sAlign">
+              <button data-v="left">Left</button><button data-v="center">Center</button>
+              <button data-v="right">Right</button><button data-v="justify">Just</button>
+            </div>
+          </div>
+          <label class="chk"><input type="checkbox" id="sBold"> Bold</label>
+          <label class="chk"><input type="checkbox" id="sUpper"> ALL CAPS</label>
+        </div>
+      </details>
+
+      <details class="group" open>
+        <summary>Text area &amp; colours</summary>
+        <div class="body">
+          <div class="row"><label>Width</label><input type="range" id="sWidth" min="30" max="100" step="1"><span class="val" id="vWidth"></span></div>
+          <div class="row"><label>Side pad</label><input type="range" id="sPad" min="0" max="20" step="1"><span class="val" id="vPad"></span></div>
+          <div class="row"><label>Eye line</label><input type="range" id="sRead" min="5" max="80" step="1"><span class="val" id="vRead"></span></div>
+          <div class="row"><label>Background</label><input type="color" id="sBg"><label style="flex:0 0 44px;text-align:right">Text</label><input type="color" id="sFg"><input type="color" id="sAccent" title="Accent / eye line"></div>
+          <div class="swatches" id="themes"></div>
+          <label class="chk"><input type="checkbox" id="sShowRead"> Show eye-line marker</label>
+          <label class="chk"><input type="checkbox" id="sFade"> Fade top &amp; bottom edges</label>
+        </div>
+      </details>
+
+      <details class="group" open>
+        <summary>Scrolling</summary>
+        <div class="body">
+          <label class="chk"><input type="checkbox" id="sAuto"> Auto-scroll at the speed below</label>
+          <p class="hint">Off: the script stays put and you drive it — arrow keys, PgUp/PgDn, a clicker,
+            the mouse wheel or a drag. Voice tracking moves it regardless of this setting.</p>
+          <div class="row"><label>Speed</label><input type="range" id="sSpeed" min="5" max="400" step="1"><span class="val" id="vSpeed"></span></div>
+          <p class="hint" id="wpmHint"></p>
+          <div class="row"><label>Mirror</label>
+            <div class="seg" id="sMirror">
+              <button data-v="x">⇄ Horizontal</button><button data-v="y">⇅ Vertical</button>
+            </div>
+          </div>
+          <label class="chk"><input type="checkbox" id="sLoop"> Loop back to the top when finished</label>
+          <label class="chk"><input type="checkbox" id="sMarkers"> Stop at <code>[pause]</code> markers</label>
+          <label class="chk"><input type="checkbox" id="sWake"> Keep screen awake while running</label>
+        </div>
+      </details>
+
+      <details class="group" open>
+        <summary>Countdowns</summary>
+        <div class="body">
+          <div class="row"><label>Lead-in</label><input type="range" id="sBefore" min="0" max="30" step="1"><span class="val" id="vBefore"></span></div>
+          <div class="row"><label>Hold at end</label><input type="range" id="sAfter" min="0" max="60" step="1"><span class="val" id="vAfter"></span></div>
+          <label class="chk"><input type="checkbox" id="sBeep"> Audible beep on each count</label>
+          <p class="hint">Lead-in runs before the scroll starts; the hold keeps the camera rolling after the last line.</p>
+        </div>
+      </details>
+
+      <details class="group" open>
+        <summary>Voice activation</summary>
+        <div class="body">
+          <div class="row"><label>Mode</label>
+            <select id="sVoiceMode">
+              <option value="follow">Follow my speech</option>
+              <option value="commands">Commands only</option>
+              <option value="both">Follow + commands</option>
+            </select>
+          </div>
+          <div class="row"><label>Language</label>
+            <select id="sLang">
+              <option value="en-US">English (US)</option><option value="en-GB">English (UK)</option>
+              <option value="en-NG">English (Nigeria)</option><option value="en-AU">English (AU)</option>
+              <option value="en-IN">English (India)</option><option value="es-ES">Español</option>
+              <option value="fr-FR">Français</option><option value="de-DE">Deutsch</option>
+              <option value="pt-BR">Português (BR)</option><option value="it-IT">Italiano</option>
+            </select>
+          </div>
+          <div class="row"><label>Catch-up</label><input type="range" id="sEase" min="2" max="30" step="1"><span class="val" id="vEase"></span></div>
+          <label class="chk"><input type="checkbox" id="sHighlight"> Dim words I've already said</label>
+          <p class="hint" id="voiceHint">Voice commands: <b>start / go</b>, <b>stop / pause</b>, <b>faster / speed up</b>,
+            <b>slower</b>, <b>bigger</b>, <b>smaller</b>, <b>back to the top</b>, <b>mirror</b>.
+            In <i>Follow + commands</i> say the command on its own, with a short break either side — that is
+            how it tells an instruction apart from the words of your script.</p>
+        </div>
+      </details>
+
+      <details class="group">
+        <summary>Keyboard &amp; remotes</summary>
+        <div class="body">
+          <p class="hint" style="line-height:1.9">
+            <span class="kbd">Space</span> play/pause · <span class="kbd">↑ ↓</span> speed ·
+            <span class="kbd">PgUp/PgDn</span> jump · <span class="kbd">← →</span> nudge ·
+            <span class="kbd">+ −</span> text size · <span class="kbd">M</span> mirror ·
+            <span class="kbd">V</span> voice · <span class="kbd">F</span> fullscreen ·
+            <span class="kbd">E</span> edit · <span class="kbd">S</span> settings ·
+            <span class="kbd">Z</span> hide all controls · <span class="kbd">R / Home</span> top ·
+            <span class="kbd">Esc</span> back.<br>
+            Most Bluetooth presenter clickers send PgUp/PgDn or arrows, so they work as remotes with no setup.
+          </p>
+        </div>
+      </details>
+    </aside>
+
+    <section class="stage">
+      <div id="viewport">
+        <div id="flip">
+          <div id="track"><div id="script"></div></div>
+        </div>
+        <div class="fade t" id="fadeT"></div>
+        <div class="fade b" id="fadeB"></div>
+        <div id="readline"></div>
+        <div id="overlay" hidden><div id="ovNum">3</div><div id="ovLabel">Get ready</div></div>
+      </div>
+
+      <div id="editorWrap" hidden>
+        <div class="ehead">
+          <b>Editing</b>
+          <span class="hint" style="margin:0">Changes apply live · <span class="kbd">Esc</span> to close</span>
+          <span class="spacer"></span>
+          <span class="hint" id="editStats" style="margin:0"></span>
+        </div>
+        <textarea id="editor" spellcheck="true" placeholder="Type, paste or drop your script here…"></textarea>
+      </div>
+
+      <div class="status">
+        <span><b id="modeTag">Manual</b></span>
+        <span>Elapsed <b id="tElapsed">0:00</b></span>
+        <span>Left <b id="tLeft">0:00</b></span>
+        <span>Est <b id="tTotal">0:00</b></span>
+        <span><b id="tWords">0</b> words</span>
+        <div id="progress"><i id="progressBar"></i></div>
+        <span id="pct">0%</span>
+        <span id="heard"></span>
+      </div>
+    </section>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+"use strict";
+
+var $ = function(id){ return document.getElementById(id); };
+var PRESENT = new URLSearchParams(location.search).get('present') === '1';
+var LS_SET = 'tp.settings.v1', LS_DOC = 'tp.doc.v1', LS_LIB = 'tp.library.v1';
+
+/* ------------------------------------------------------------------ state */
+var S = {
+  fontSize:64, lineHeight:1.5, letterSpacing:0, family:'sans', align:'left',
+  bold:false, upper:false, width:80, pad:4, readline:35,
+  bg:'#000000', fg:'#ffffff', accent:'#ff4d4d', showRead:true, fade:true,
+  speed:60, autoScroll:false, mirrorX:false, mirrorY:false, loop:false, markers:true, wake:true,
+  before:3, after:5, beep:true,
+  voiceMode:'follow', lang:'en-US', ease:12, highlight:true
+};
+var FONTS = {
+  sans:'ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+  serif:'Georgia, "Times New Roman", ui-serif, serif',
+  mono:'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+  cond:'"Arial Narrow", "Helvetica Neue Condensed", "Roboto Condensed", system-ui, sans-serif',
+  round:'"Trebuchet MS", "Verdana", "Comic Sans MS", system-ui, sans-serif'
+};
+var THEMES = [
+  ['#000000','#ffffff'], ['#ffffff','#000000'], ['#0b1c2c','#ffe9a8'],
+  ['#101418','#8ef5b0'], ['#1a1206','#ffd9a0'], ['#001b2e','#e8f1ff'],
+  ['#2b0b0b','#ffdede'], ['#f4f1e8','#1b1b1b']
+];
+
+var text = '', words = [], markers = [], sections = [];
+var pos = 0, maxPos = 0, playing = false, ptr = 0, voiceTarget = -1;
+var elapsed = 0, lastT = 0, raf = 0, wakeLock = null, rec = null, voiceOn = false;
+var countdownTimer = null, finished = false, lastMarker = -1;
+
+/* ------------------------------------------------------------ DOM handles */
+var viewport=$('viewport'), flip=$('flip'), track=$('track'), scriptEl=$('script'),
+    overlay=$('overlay'), ovNum=$('ovNum'), ovLabel=$('ovLabel'), editor=$('editor');
+
+/* --------------------------------------------------------------- utilities */
+function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
+function fmt(s){
+  s = Math.max(0, Math.round(s));
+  var m = Math.floor(s/60), r = s%60;
+  return m + ':' + (r<10?'0':'') + r;
+}
+var toastT;
+function toast(msg){
+  if (PRESENT) return;
+  var t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastT); toastT = setTimeout(function(){ t.classList.remove('show'); }, 1600);
+}
+function norm(w){
+  return w.toLowerCase().replace(/[^\p{L}\p{N}']/gu,'');
+}
+
+/* ------------------------------------------------------------ persistence */
+function saveSettings(){ try{ localStorage.setItem(LS_SET, JSON.stringify(S)); }catch(e){} }
+function loadSettings(){
+  try{
+    var raw = localStorage.getItem(LS_SET);
+    if (raw){ var o = JSON.parse(raw); for (var k in S) if (o[k] !== undefined) S[k] = o[k]; }
+  }catch(e){}
+}
+function saveDoc(){ try{ localStorage.setItem(LS_DOC, text); }catch(e){} }
+function getLib(){ try{ return JSON.parse(localStorage.getItem(LS_LIB) || '[]'); }catch(e){ return []; } }
+function setLib(l){ try{ localStorage.setItem(LS_LIB, JSON.stringify(l)); }catch(e){} }
+
+/* ---------------------------------------------------------------- styling */
+function applyStyle(){
+  var r = document.documentElement.style;
+  r.setProperty('--tp-size', S.fontSize + 'px');
+  r.setProperty('--tp-lh', S.lineHeight);
+  r.setProperty('--tp-ls', S.letterSpacing + 'px');
+  r.setProperty('--tp-align', S.align);
+  r.setProperty('--tp-width', S.width + '%');
+  r.setProperty('--tp-pad', S.pad + '%');
+  r.setProperty('--tp-weight', S.bold ? 700 : 400);
+  r.setProperty('--tp-transform', S.upper ? 'uppercase' : 'none');
+  r.setProperty('--tp-font', FONTS[S.family] || FONTS.sans);
+  r.setProperty('--tp-bg', S.bg);
+  r.setProperty('--tp-fg', S.fg);
+  r.setProperty('--tp-accent', S.accent);
+  r.setProperty('--readline', S.readline + '%');
+  flip.style.transform = 'scale(' + (S.mirrorX?-1:1) + ',' + (S.mirrorY?-1:1) + ')';
+  $('readline').style.display = S.showRead ? '' : 'none';
+  $('fadeT').style.display = $('fadeB').style.display = S.fade ? '' : 'none';
+  measure();
+}
+
+/* -------------------------------------------------------------- rendering */
+function render(){
+  var lines = text.split(/\r?\n/);
+  var frag = document.createDocumentFragment();
+  words = []; sections = [];
+  for (var i=0; i<lines.length; i++){
+    var raw = lines[i], t = raw.trim(), div = document.createElement('div');
+    if (!t){ div.className = 'line blank'; frag.appendChild(div); continue; }
+    if (/^\[\s*pause\s*\]$/i.test(t)){
+      div.className = 'line'; div.setAttribute('data-marker','1');
+      var chip = document.createElement('span');
+      chip.className = 'marker'; chip.textContent = '⏸ PAUSE';
+      div.appendChild(chip); frag.appendChild(div); continue;
+    }
+    if (/^#{1,6}\s+/.test(t)){
+      div.className = 'line h';
+      div.textContent = t.replace(/^#{1,6}\s+/,'');
+      div.setAttribute('data-section', String(sections.length));
+      sections.push({ title: div.textContent, el: div });
+      frag.appendChild(div); continue;
+    }
+    div.className = 'line';
+    var parts = t.split(/\s+/);
+    for (var j=0; j<parts.length; j++){
+      var sp = document.createElement('span');
+      sp.className = 'w'; sp.textContent = parts[j];
+      div.appendChild(sp); div.appendChild(document.createTextNode(' '));
+      words.push({ el: sp, n: norm(parts[j]) });
+    }
+    frag.appendChild(div);
+  }
+  scriptEl.textContent = '';
+  scriptEl.appendChild(frag);
+  ptr = 0; voiceTarget = -1; lastMarker = -1;
+  measure();
+  buildJump();
+  markers = [].slice.call(scriptEl.querySelectorAll('[data-marker]'));
+  $('tWords').textContent = words.length;
+  $('editStats').textContent = words.length + ' words · ~' + fmt(estSeconds()) + ' at this speed';
+  if (!PRESENT) broadcast(true);
+}
+
+function measure(){
+  var vh = viewport.clientHeight || 1;
+  var top = vh * (S.readline/100);
+  scriptEl.style.paddingTop = top + 'px';
+  scriptEl.style.paddingBottom = (vh - top * 0.35) + 'px';
+  maxPos = Math.max(0, track.scrollHeight - vh * 0.5);
+  pos = clamp(pos, 0, maxPos);
+  paint();
+  updateStatus();
+}
+
+function paint(){
+  track.style.transform = 'translate3d(0,' + (-pos) + 'px,0)';
+}
+
+function readlinePx(){ return (viewport.clientHeight||0) * (S.readline/100); }
+
+/* Keep the line currently at the eye line put across a re-layout.
+   Done synchronously: deferring the correction to the next frame painted the
+   new size at the old position first, which read as a double jump. */
+function preserveAnchor(fn){
+  var anchor = lineAnchor();
+  fn();
+  measure();
+  if (anchor >= 0 && words[anchor]) scrollToWord(anchor, true);
+}
+/* The FIRST word of the visual line on the eye line.
+   Every word in a line shares an offsetTop, so a plain search lands on the
+   line's LAST word — and that word reflows onto a later line as soon as the
+   text grows, throwing the script forward. The first word is stable. */
+function lineAnchor(){
+  if (!words.length) return -1;
+  var y = pos + readlinePx(), lo = 0, hi = words.length - 1, best = 0;
+  while (lo <= hi){
+    var mid = (lo + hi) >> 1, t = words[mid].el.offsetTop;
+    if (t <= y){ best = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  var top = words[best].el.offsetTop;
+  while (best > 0 && words[best - 1].el.offsetTop === top) best--;
+  return best;
+}
+function scrollToWord(i, instant){
+  var w = words[i]; if (!w) return;
+  /* Line top sits on the eye line, so anchor -> scroll -> anchor round-trips
+     to the same line instead of creeping. */
+  var target = clamp(w.el.offsetTop - readlinePx(), 0, maxPos);
+  if (instant){ pos = target; paint(); } else voiceTarget = target;
+}
+
+/* ----------------------------------------------------------- jump / menus */
+function buildJump(){
+  var sel = $('jump');
+  sel.innerHTML = '<option value="">Jump to…</option>';
+  for (var i=0; i<sections.length; i++){
+    var o = document.createElement('option');
+    o.value = String(i); o.textContent = sections[i].title;
+    sel.appendChild(o);
+  }
+  sel.style.display = sections.length ? '' : 'none';
+}
+$('jump').addEventListener('change', function(){
+  var i = this.value; if (i === '') return;
+  pos = clamp(sections[+i].el.offsetTop - readlinePx(), 0, maxPos);
+  paint(); this.value = ''; updateStatus();
+});
+
+/* ------------------------------------------------------------ scroll loop */
+function estSeconds(){ return maxPos / Math.max(1, S.speed); }
+function wpm(){
+  if (!words.length || !maxPos) return 0;
+  return Math.round(words.length / (estSeconds()/60));
+}
+
+function tick(t){
+  raf = requestAnimationFrame(tick);
+  var dt = lastT ? Math.min(0.1, (t - lastT)/1000) : 0;
+  lastT = t;
+  if (!playing) return;
+  elapsed += dt;
+
+  var prevPos = pos;
+  if (voiceOn && (S.voiceMode === 'follow' || S.voiceMode === 'both')){
+    // Ease toward where the speaker actually is; hold still until we hear them.
+    if (voiceTarget >= 0){
+      var d = voiceTarget - pos;
+      pos += d * Math.min(1, S.ease/100 * dt * 60);
+      if (Math.abs(d) < 0.5) pos = voiceTarget;
+    }
+  } else if (S.autoScroll){
+    pos += S.speed * dt;
+  }
+  /* Neither voice nor auto-scroll: the script holds still and the reader
+     drives it. The clock keeps running so takes can still be timed. */
+  pos = clamp(pos, 0, maxPos);
+
+  if (S.markers) checkMarkers(prevPos);
+
+  if (pos >= maxPos - 0.5 && !finished){
+    finished = true;
+    if (S.after > 0) runCountdown(S.after, 'Hold', endOfScript);
+    else endOfScript();
+  }
+  paint();
+  updateStatus();
+  broadcast(false);
+}
+function checkMarkers(prevPos){
+  var y = pos + readlinePx(), prevY = prevPos + readlinePx();
+  for (var i=0; i<markers.length; i++){
+    var top = markers[i].offsetTop;
+    // crossing test, so a fast scroll can never step straight over a marker
+    if (i > lastMarker && y >= top && prevY < top + markers[i].offsetHeight){
+      lastMarker = i;
+      pos = Math.max(0, top - readlinePx());
+      pause(); toast('Paused at marker — press Space to continue');
+      return;
+    }
+  }
+}
+function endOfScript(){
+  if (S.loop){ pos = 0; ptr = 0; finished = false; clearHighlight(); paint(); return; }
+  pause();
+  showOverlay('✓','Finished');
+  setTimeout(hideOverlay, 1400);
+}
+
+function updateStatus(){
+  if (PRESENT) return;
+  var total = estSeconds(), moving = voiceOn || S.autoScroll;
+  var left = Math.max(0, (maxPos - pos) / Math.max(1, S.speed));
+  $('modeTag').textContent = voiceOn ? 'Voice' : (S.autoScroll ? 'Auto' : 'Manual');
+  $('tElapsed').textContent = fmt(elapsed);
+  /* Nothing is driving the scroll, so a countdown to the end would be fiction. */
+  $('tLeft').textContent = moving ? fmt(left) : '—';
+  $('tTotal').textContent = moving ? fmt(total) : '—';
+  var p = maxPos ? pos/maxPos : 0;
+  $('progressBar').style.width = (p*100) + '%';
+  $('pct').textContent = Math.round(p*100) + '%';
+  var w = wpm();
+  $('wpmHint').textContent = S.speed + ' px/sec ≈ ' + (w||'–') + ' words per minute · whole script ≈ ' + fmt(total);
+}
+
+/* ------------------------------------------------------------- transport */
+function play(){
+  if (playing) return;
+  if (S.before > 0 && pos < 1){ runCountdown(S.before, 'Get ready', start); }
+  else start();
+}
+function start(){
+  playing = true; finished = pos >= maxPos - 1 ? false : finished;
+  if (pos >= maxPos - 1){ pos = 0; }
+  $('btnPlay').textContent = '❚❚ Pause';
+  $('btnPlay').classList.add('on');
+  requestWake();
+  if (!voiceOn && !S.autoScroll) toast('Manual — scroll with ↑↓, PgUp/PgDn, a clicker or a drag');
+  broadcast(true);
+}
+function pause(){
+  playing = false;
+  $('btnPlay').textContent = '▶ Start';
+  $('btnPlay').classList.remove('on');
+  releaseWake();
+  broadcast(true);
+}
+function toggle(){ playing ? pause() : play(); }
+function toggleFullscreen(){
+  if (document.fullscreenElement) document.exitFullscreen();
+  else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen();
+}
+function resetTop(){
+  pos = 0; ptr = 0; elapsed = 0; finished = false; lastMarker = -1; voiceTarget = -1;
+  clearHighlight(); paint(); updateStatus(); broadcast(true);
+}
+
+/* ------------------------------------------------------------- countdown */
+function showOverlay(num, label){ ovNum.textContent = num; ovLabel.textContent = label; overlay.hidden = false; }
+function hideOverlay(){ overlay.hidden = true; }
+function runCountdown(n, label, done){
+  cancelCountdown();
+  var i = n;
+  showOverlay(i, label); beep(i === 1 ? 880 : 440);
+  countdownTimer = setInterval(function(){
+    i--;
+    if (i <= 0){ cancelCountdown(); hideOverlay(); beep(1200); done && done(); return; }
+    showOverlay(i, label); beep(i === 1 ? 880 : 440);
+  }, 1000);
+}
+function cancelCountdown(){ if (countdownTimer){ clearInterval(countdownTimer); countdownTimer = null; } }
+var actx;
+function beep(freq){
+  if (!S.beep) return;
+  try{
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    var o = actx.createOscillator(), g = actx.createGain();
+    o.frequency.value = freq; o.type = 'sine';
+    g.gain.setValueAtTime(0.001, actx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.25, actx.currentTime + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + 0.16);
+    o.connect(g); g.connect(actx.destination);
+    o.start(); o.stop(actx.currentTime + 0.18);
+  }catch(e){}
+}
+
+/* -------------------------------------------------------------- wake lock */
+function requestWake(){
+  if (!S.wake || !navigator.wakeLock || wakeLock) return;
+  navigator.wakeLock.request('screen').then(function(l){
+    wakeLock = l; l.addEventListener('release', function(){ wakeLock = null; });
+  }).catch(function(){});
+}
+function releaseWake(){ if (wakeLock){ try{ wakeLock.release(); }catch(e){} wakeLock = null; } }
+document.addEventListener('visibilitychange', function(){
+  if (document.visibilityState === 'visible' && playing) requestWake();
+});
+
+/* ------------------------------------------------------- voice activation */
+var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+/* file:// pages have no persistable origin, so Chrome cannot remember a
+   microphone grant and re-asks on every recognition start. */
+var IS_FILE = location.protocol === 'file:', fileRestarts = 0;
+function toggleVoice(){ voiceOn ? stopVoice() : startVoice(); }
+function startVoice(){
+  if (!SR){ toast('This browser has no speech recognition — try Chrome or Edge.'); return; }
+  try{
+    rec = new SR();
+    rec.continuous = true; rec.interimResults = true; rec.lang = S.lang; rec.maxAlternatives = 1;
+    rec.onresult = onResult;
+    rec.onerror = function(e){
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed'){
+        toast('Microphone blocked — allow mic access to use voice.'); stopVoice();
+      }
+    };
+    /* Chrome ends the session after a lull. Restart at once and retry, or the
+       first words spoken into that gap — often a command — are simply lost. */
+    rec.onend = function(){
+      if (!voiceOn) return;
+      /* On file:// each restart raises another permission prompt, so stop
+         rather than spamming the reader mid-take. */
+      if (IS_FILE && ++fileRestarts > 1){
+        stopVoice();
+        toast('Chrome keeps re-asking for the mic on local files — open the page over https or localhost');
+        return;
+      }
+      var tries = 0;
+      (function restart(){
+        if (!voiceOn || tries++ > 5) return;
+        try{ rec.start(); }catch(e){ setTimeout(restart, 150); }
+      })();
+    };
+    rec.start();
+    voiceOn = true; fileRestarts = 0;
+    $('btnVoice').classList.add('on');
+    toast(S.voiceMode === 'commands' ? 'Listening for commands' : 'Voice tracking on — start reading');
+    if (S.voiceMode !== 'commands' && !playing) play();
+  }catch(e){ toast('Could not start the microphone.'); }
+}
+function stopVoice(){
+  voiceOn = false; voiceTarget = -1;
+  $('btnVoice').classList.remove('on');
+  $('heard').textContent = '';
+  if (rec){ try{ rec.onend = null; rec.stop(); }catch(e){} rec = null; }
+}
+
+/* One step is a proportion of the current value, so a command feels the same
+   whether you are crawling or racing. */
+function speedStep(dir){
+  var step = Math.max(10, Math.round(S.speed * 0.2));
+  setSpeed(S.speed + dir * step);
+  toast((dir > 0 ? 'Faster — ' : 'Slower — ') + S.speed + ' px/s ≈ ' + (wpm() || '–') + ' wpm');
+}
+var COMMANDS = [
+  { re:/\b(start scrolling|start|go ahead|begin|resume|play)\b/, run:function(){ if (!playing){ play(); toast('Playing'); } } },
+  { re:/\b(stop|pause|hold on|freeze|wait)\b/,                   run:function(){ if (playing){ pause(); toast('Paused'); } } },
+  { re:/\b(faster|speed up)\b/,       run:function(){ speedStep(1); } },
+  { re:/\b(slower|slow down)\b/,      run:function(){ speedStep(-1); } },
+  { re:/\b(bigger|larger|zoom in)\b/, run:function(){ setFont(S.fontSize + 8); toast('Text ' + S.fontSize + 'px'); } },
+  { re:/\b(smaller|zoom out)\b/,      run:function(){ setFont(S.fontSize - 8); toast('Text ' + S.fontSize + 'px'); } },
+  { re:/\b(back to the top|go to top|restart|start over)\b/, run:function(){ resetTop(); toast('Back to top'); } },
+  { re:/\b(mirror)\b/, run:function(){ S.mirrorX = !S.mirrorX; applyStyle(); syncUI(); saveSettings(); toast('Mirror ' + (S.mirrorX ? 'on' : 'off')); } }
+];
+
+/* A command must fire ONCE per utterance. The recogniser re-sends the same
+   words in every interim result, so without this latch one "speed up" lands
+   as five or six, and the scroll bolts away from the reader. */
+var lastCmd = -1, lastCmdUtter = -1, lastCmdAt = 0;
+function tryCommand(heard, utterIdx, strict){
+  var low = ' ' + heard.toLowerCase().replace(/[^\p{L}\p{N}' ]/gu,' ').replace(/\s+/g,' ').trim() + ' ';
+  var count = low.trim() ? low.trim().split(' ').length : 0;
+  for (var c = 0; c < COMMANDS.length; c++){
+    if (!COMMANDS[c].re.test(low)) continue;
+    /* While following a script, only obey a short standalone phrase — otherwise
+       the words of the script itself ("...and then we stop...") hijack it. */
+    if (strict && count > 4) return false;
+    var now = performance.now();
+    /* Same command, same utterance = a repeat of the interim transcript. The
+       short time guard also absorbs a phrase the recogniser splits in two,
+       while still letting you deliberately say "faster" twice in a row. */
+    if (c === lastCmd && (utterIdx === lastCmdUtter || now - lastCmdAt < 1000)) return true;
+    lastCmd = c; lastCmdUtter = utterIdx; lastCmdAt = now;
+    COMMANDS[c].run();
+    return true;
+  }
+  return false;
+}
+
+function onResult(ev){
+  var interim = '', finalTxt = '';
+  for (var i = ev.resultIndex; i < ev.results.length; i++){
+    var r = ev.results[i];
+    if (r.isFinal) finalTxt += r[0].transcript + ' '; else interim += r[0].transcript + ' ';
+  }
+  var heard = (finalTxt + interim).trim();
+  if (!heard) return;
+  $('heard').textContent = heard.slice(-60);
+
+  if (S.voiceMode === 'commands' || S.voiceMode === 'both'){
+    /* Only the newest utterance can be a command, not the whole rolling
+       transcript — otherwise an old command keeps re-matching. */
+    var utter = (ev.results[ev.results.length - 1] || [{}])[0].transcript || heard;
+    if (tryCommand(utter, ev.results.length - 1, S.voiceMode === 'both')) return;
+  }
+  if (S.voiceMode === 'commands') return;
+
+  var tail = heard.split(/\s+/).map(norm).filter(Boolean).slice(-7);
+  if (tail.length) followSpeech(tail);
+}
+
+/* Align the tail of what was heard against the words just ahead of the pointer. */
+function followSpeech(tail){
+  if (!words.length) return;
+  var from = Math.max(0, ptr - 6), to = Math.min(words.length, ptr + 70);
+  var best = -1, bestScore = 0, bestHits = 0;
+  for (var end = from; end < to; end++){
+    var score = 0, hits = 0;
+    for (var k = 0; k < tail.length; k++){
+      var wi = end - (tail.length - 1 - k);
+      if (wi < 0 || wi >= words.length) continue;
+      if (words[wi].n && words[wi].n === tail[k]){ score += (k + 1); hits++; }
+    }
+    /* Nudge toward the nearest candidate: a repeated phrase later in the
+       script must not outscore the one the reader is actually on. */
+    score -= Math.abs(end - ptr) * 0.05;
+    if (score > bestScore){ bestScore = score; bestHits = hits; best = end; }
+  }
+  var need = tail.length >= 3 ? 2 : 1;
+  if (best < 0 || bestHits < need) return;
+  if (best < ptr - 4) return;              // ignore large backward jumps (echo / repeats)
+  ptr = best;
+  if (!playing) play();
+  scrollToWord(ptr, false);
+  if (S.highlight) highlight(ptr);
+}
+function highlight(i){
+  clearHighlight();
+  for (var k = Math.max(0, i - 400); k <= i; k++) words[k].el.classList.add('spoken');
+  if (words[i]) words[i].el.classList.add('here');
+}
+function clearHighlight(){
+  var els = scriptEl.querySelectorAll('.spoken,.here');
+  for (var i=0;i<els.length;i++){ els[i].classList.remove('spoken'); els[i].classList.remove('here'); }
+}
+
+/* ------------------------------------------------------------ file import */
+function decodeEntities(s){
+  return s.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"')
+          .replace(/&apos;/g,"'").replace(/&#(\d+);/g,function(_,d){return String.fromCharCode(+d);})
+          .replace(/&amp;/g,'&');
+}
+function stripHtml(html){
+  var d = document.createElement('div');
+  d.innerHTML = html.replace(/<(script|style)[\s\S]*?<\/\1>/gi,'')
+                    .replace(/<\/(p|div|h[1-6]|li|tr)>/gi,'\n')
+                    .replace(/<br\s*\/?>/gi,'\n');
+  return (d.textContent || '').replace(/\n{3,}/g,'\n\n').trim();
+}
+function stripRtf(s){
+  return s.replace(/\\par[d]?/g,'\n').replace(/\{\\\*[\s\S]*?\}/g,'')
+          .replace(/\\'([0-9a-f]{2})/gi,function(_,h){return String.fromCharCode(parseInt(h,16));})
+          .replace(/\\[a-z]+-?\d* ?/gi,'').replace(/[{}]/g,'').trim();
+}
+function stripSubs(s){
+  return s.split(/\r?\n/).filter(function(l){
+    return !/^\d+$/.test(l.trim()) && !/-->/.test(l) && !/^WEBVTT/i.test(l);
+  }).join('\n').replace(/\n{3,}/g,'\n\n').trim();
+}
+
+/* Minimal .docx reader: locate word/document.xml in the zip and inflate it
+   with DecompressionStream — no external libraries. */
+function readDocx(buf){
+  var dv = new DataView(buf), u8 = new Uint8Array(buf), eocd = -1;
+  for (var i = u8.length - 22; i >= 0 && i > u8.length - 66000; i--){
+    if (dv.getUint32(i, true) === 0x06054b50){ eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('not a zip');
+  var count = dv.getUint16(eocd + 10, true), cd = dv.getUint32(eocd + 16, true), p = cd, found = null;
+  for (var e = 0; e < count; e++){
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    var method = dv.getUint16(p + 10, true),
+        csize  = dv.getUint32(p + 20, true),
+        nlen   = dv.getUint16(p + 28, true),
+        xlen   = dv.getUint16(p + 30, true),
+        clen   = dv.getUint16(p + 32, true),
+        lho    = dv.getUint32(p + 42, true),
+        name   = new TextDecoder().decode(u8.subarray(p + 46, p + 46 + nlen));
+    if (name === 'word/document.xml'){ found = { method: method, csize: csize, lho: lho }; break; }
+    p += 46 + nlen + xlen + clen;
+  }
+  if (!found) throw new Error('no document.xml');
+  var lnlen = dv.getUint16(found.lho + 26, true), lxlen = dv.getUint16(found.lho + 28, true),
+      dstart = found.lho + 30 + lnlen + lxlen,
+      raw = u8.subarray(dstart, dstart + found.csize);
+  if (found.method === 0) return Promise.resolve(docxXmlToText(new TextDecoder().decode(raw)));
+  if (typeof DecompressionStream === 'undefined') throw new Error('no inflate');
+  var ds = new DecompressionStream('deflate-raw');
+  var stream = new Blob([raw]).stream().pipeThrough(ds);
+  return new Response(stream).text().then(docxXmlToText);
+}
+function docxXmlToText(xml){
+  return decodeEntities(
+    xml.replace(/<w:tab[^>]*\/>/g,'\t')
+       .replace(/<w:br[^>]*\/>/g,'\n')
+       .replace(/<\/w:p>/g,'\n')
+       .replace(/<[^>]+>/g,'')
+  ).replace(/\n{3,}/g,'\n\n').trim();
+}
+
+function loadFile(f){
+  if (!f) return;
+  var name = (f.name || '').toLowerCase();
+  var done = function(t){ setText(t); toast('Loaded ' + f.name); };
+  if (/\.docx$/.test(name)){
+    f.arrayBuffer().then(readDocx).then(done).catch(function(){
+      toast('Could not read that .docx — save it as .txt and try again.');
+    });
+    return;
+  }
+  var r = new FileReader();
+  r.onload = function(){
+    var s = String(r.result || '');
+    if (/\.html?$/.test(name)) s = stripHtml(s);
+    else if (/\.rtf$/.test(name)) s = stripRtf(s);
+    else if (/\.(srt|vtt)$/.test(name)) s = stripSubs(s);
+    done(s);
+  };
+  r.readAsText(f);
+}
+function setText(t){
+  text = t;
+  editor.value = t;
+  saveDoc();
+  render();
+  resetTop();
+}
+
+/* drag & drop anywhere */
+['dragover','drop'].forEach(function(ev){
+  document.addEventListener(ev, function(e){
+    e.preventDefault();
+    if (ev === 'drop'){
+      var dt = e.dataTransfer;
+      if (dt.files && dt.files[0]) loadFile(dt.files[0]);
+      else { var s = dt.getData('text'); if (s) setText(s); }
+    }
+  });
+});
+
+/* -------------------------------------------------------------- library */
+function renderLib(){
+  var lib = getLib(), box = $('lib');
+  box.innerHTML = '';
+  if (!lib.length){ box.innerHTML = '<div class="item" style="color:var(--ui-dim)">No saved scripts yet</div>'; return; }
+  lib.forEach(function(item, i){
+    var row = document.createElement('div'); row.className = 'item';
+    var s = document.createElement('span'); s.textContent = item.name; s.title = 'Load';
+    s.onclick = function(){ setText(item.body); toast('Loaded “' + item.name + '”'); };
+    var del = document.createElement('button'); del.textContent = '✕'; del.title = 'Delete';
+    del.onclick = function(){ var l = getLib(); l.splice(i,1); setLib(l); renderLib(); };
+    row.appendChild(s); row.appendChild(del); box.appendChild(row);
+  });
+}
+
+/* ------------------------------------------------------------ second screen */
+var chan = ('BroadcastChannel' in window) ? new BroadcastChannel('teleprompter-sync') : null;
+var lastBroadcast = 0;
+function broadcast(full){
+  if (!chan || PRESENT) return;
+  var now = performance.now();
+  if (!full && now - lastBroadcast < 33) return;
+  lastBroadcast = now;
+  chan.postMessage(full
+    ? { type:'full', text:text, S:S, pos:pos, playing:playing }
+    : { type:'pos', pos:pos, playing:playing });
+}
+if (chan){
+  chan.onmessage = function(e){
+    var m = e.data;
+    if (PRESENT){
+      if (m.type === 'full'){
+        for (var k in S) if (m.S[k] !== undefined) S[k] = m.S[k];
+        if (m.text !== text){ text = m.text; render(); }
+        applyStyle(); pos = m.pos; paint();
+      } else if (m.type === 'pos'){ pos = m.pos; paint(); }
+    } else if (m.type === 'hello'){ broadcast(true); }
+  };
+  if (PRESENT) chan.postMessage({ type:'hello' });
+}
+
+/* ------------------------------------------------------------------- UI */
+function setSpeed(v){ S.speed = clamp(Math.round(v), 5, 400); $('sSpeed').value = S.speed; $('vSpeed').textContent = S.speed; updateStatus(); saveSettings(); broadcast(true); }
+function setFont(v){
+  v = clamp(Math.round(v), 16, 200);
+  preserveAnchor(function(){ S.fontSize = v; applyStyle(); });
+  $('sFont').value = v; $('vFont').textContent = v + 'px'; saveSettings(); broadcast(true);
+}
+
+function bindRange(id, key, label, fmtFn, relayout){
+  var el = $(id), out = $(label);
+  el.addEventListener('input', function(){
+    var v = parseFloat(el.value);
+    if (relayout) preserveAnchor(function(){ S[key] = v; applyStyle(); });
+    else { S[key] = v; applyStyle(); }
+    out.textContent = fmtFn ? fmtFn(v) : v;
+    updateStatus(); saveSettings(); broadcast(true);
+  });
+}
+function bindCheck(id, key, after){
+  var el = $(id);
+  el.addEventListener('change', function(){
+    S[key] = el.checked; applyStyle(); saveSettings(); after && after(); broadcast(true);
+  });
+}
+
+function syncUI(){
+  $('sFont').value = S.fontSize;  $('vFont').textContent = S.fontSize + 'px';
+  $('sLh').value = S.lineHeight;  $('vLh').textContent = S.lineHeight.toFixed(2);
+  $('sLs').value = S.letterSpacing; $('vLs').textContent = S.letterSpacing + 'px';
+  $('sFam').value = S.family;
+  $('sWidth').value = S.width;    $('vWidth').textContent = S.width + '%';
+  $('sPad').value = S.pad;        $('vPad').textContent = S.pad + '%';
+  $('sRead').value = S.readline;  $('vRead').textContent = S.readline + '%';
+  $('sSpeed').value = S.speed;    $('vSpeed').textContent = S.speed;
+  $('sBefore').value = S.before;  $('vBefore').textContent = S.before + 's';
+  $('sAfter').value = S.after;    $('vAfter').textContent = S.after + 's';
+  $('sEase').value = S.ease;      $('vEase').textContent = S.ease;
+  $('sBg').value = S.bg; $('sFg').value = S.fg; $('sAccent').value = S.accent;
+  $('sBold').checked = S.bold; $('sUpper').checked = S.upper;
+  $('sShowRead').checked = S.showRead; $('sFade').checked = S.fade;
+  $('sAuto').checked = S.autoScroll;
+  $('sLoop').checked = S.loop; $('sMarkers').checked = S.markers; $('sWake').checked = S.wake;
+  $('sBeep').checked = S.beep; $('sHighlight').checked = S.highlight;
+  $('sVoiceMode').value = S.voiceMode; $('sLang').value = S.lang;
+  [].forEach.call($('sAlign').children, function(b){ b.classList.toggle('on', b.dataset.v === S.align); });
+  $('sMirror').children[0].classList.toggle('on', S.mirrorX);
+  $('sMirror').children[1].classList.toggle('on', S.mirrorY);
+  $('btnMirror').classList.toggle('on', S.mirrorX || S.mirrorY);
+}
+
+function wireUI(){
+  bindRange('sLh','lineHeight','vLh', function(v){ return v.toFixed(2); }, true);
+  bindRange('sLs','letterSpacing','vLs', function(v){ return v + 'px'; }, true);
+  bindRange('sWidth','width','vWidth', function(v){ return v + '%'; }, true);
+  bindRange('sPad','pad','vPad', function(v){ return v + '%'; }, true);
+  bindRange('sRead','readline','vRead', function(v){ return v + '%'; }, true);
+  bindRange('sBefore','before','vBefore', function(v){ return v + 's'; });
+  bindRange('sAfter','after','vAfter', function(v){ return v + 's'; });
+  bindRange('sEase','ease','vEase');
+
+  $('sFont').addEventListener('input', function(){ setFont(+this.value); });
+  $('sSpeed').addEventListener('input', function(){ setSpeed(+this.value); });
+  $('sFam').addEventListener('change', function(){
+    var v = this.value; preserveAnchor(function(){ S.family = v; applyStyle(); }); saveSettings(); broadcast(true);
+  });
+  ['sBg','sFg','sAccent'].forEach(function(id){
+    $(id).addEventListener('input', function(){
+      S[id === 'sBg' ? 'bg' : id === 'sFg' ? 'fg' : 'accent'] = this.value;
+      applyStyle(); saveSettings(); broadcast(true);
+    });
+  });
+  bindCheck('sBold','bold'); bindCheck('sUpper','upper');
+  bindCheck('sShowRead','showRead'); bindCheck('sFade','fade');
+  bindCheck('sAuto','autoScroll', function(){ updateStatus(); });
+  bindCheck('sLoop','loop'); bindCheck('sMarkers','markers');
+  bindCheck('sWake','wake', function(){ if (S.wake && playing) requestWake(); else releaseWake(); });
+  bindCheck('sBeep','beep'); bindCheck('sHighlight','highlight', function(){ if (!S.highlight) clearHighlight(); });
+
+  $('sVoiceMode').addEventListener('change', function(){ S.voiceMode = this.value; saveSettings(); });
+  $('sLang').addEventListener('change', function(){
+    S.lang = this.value; saveSettings();
+    if (voiceOn){ stopVoice(); startVoice(); }
+  });
+
+  $('sAlign').addEventListener('click', function(e){
+    var b = e.target.closest('button'); if (!b) return;
+    preserveAnchor(function(){ S.align = b.dataset.v; applyStyle(); });
+    syncUI(); saveSettings(); broadcast(true);
+  });
+  $('sMirror').addEventListener('click', function(e){
+    var b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.v === 'x') S.mirrorX = !S.mirrorX; else S.mirrorY = !S.mirrorY;
+    applyStyle(); syncUI(); saveSettings(); broadcast(true);
+  });
+
+  var tw = $('themes');
+  THEMES.forEach(function(t){
+    var b = document.createElement('button');
+    b.style.background = t[0]; b.style.color = t[1]; b.textContent = 'Aa';
+    b.title = t[0] + ' on ' + t[1];
+    b.onclick = function(){ S.bg = t[0]; S.fg = t[1]; applyStyle(); syncUI(); saveSettings(); broadcast(true); };
+    tw.appendChild(b);
+  });
+
+  $('btnPlay').onclick = toggle;
+  $('btnReset').onclick = resetTop;
+  $('btnVoice').onclick = toggleVoice;
+  $('btnMirror').onclick = function(){ S.mirrorX = !S.mirrorX; applyStyle(); syncUI(); saveSettings(); broadcast(true); };
+  $('btnPanel').onclick = function(){ $('panel').hidden = !$('panel').hidden; this.classList.toggle('on', !$('panel').hidden); setTimeout(measure, 0); };
+  $('btnEdit').onclick = function(){
+    var w = $('editorWrap'); w.hidden = !w.hidden;
+    this.classList.toggle('on', !w.hidden);
+    setTimeout(function(){ measure(); if (!w.hidden) editor.focus(); }, 0);
+  };
+  $('btnFull').onclick = toggleFullscreen;
+  $('btnPresent').onclick = function(){
+    window.open(location.pathname + '?present=1', 'tp_present', 'width=1024,height=680');
+    setTimeout(function(){ broadcast(true); }, 700);
+  };
+  $('btnOpen').onclick = function(){ $('file').click(); };
+  $('file').onchange = function(){ loadFile(this.files[0]); this.value = ''; };
+  $('btnPaste').onclick = function(){
+    if (navigator.clipboard && navigator.clipboard.readText){
+      navigator.clipboard.readText().then(function(t){
+        if (t) { setText(t); toast('Pasted from clipboard'); }
+      }).catch(function(){ openEditorForPaste(); });
+    } else openEditorForPaste();
+  };
+  function openEditorForPaste(){
+    $('editorWrap').hidden = false; $('btnEdit').classList.add('on');
+    editor.focus(); toast('Paste into the editor below (Ctrl/Cmd+V)');
+    measure();
+  }
+  $('btnNew').onclick = function(){
+    if (text && !confirm('Clear the current script?')) return;
+    setText('');
+    $('editorWrap').hidden = false; $('btnEdit').classList.add('on'); editor.focus();
+  };
+  $('btnSave').onclick = function(){
+    var first = (text.trim().split(/\r?\n/)[0] || 'Untitled').replace(/^#+\s*/,'').slice(0,48);
+    var name = prompt('Save script as:', first);
+    if (!name) return;
+    var lib = getLib();
+    var existing = lib.findIndex(function(x){ return x.name === name; });
+    if (existing >= 0) lib[existing].body = text; else lib.unshift({ name: name, body: text });
+    setLib(lib.slice(0, 50)); renderLib(); toast('Saved');
+  };
+  $('btnExport').onclick = function(){
+    var blob = new Blob([text], { type:'text/plain' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = ((text.trim().split(/\r?\n/)[0] || 'script').replace(/[^\w\- ]+/g,'').slice(0,40) || 'script') + '.txt';
+    a.click();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); }, 2000);
+  };
+
+  var editTimer;
+  editor.addEventListener('input', function(){
+    text = editor.value;
+    clearTimeout(editTimer);
+    editTimer = setTimeout(function(){
+      preserveAnchor(function(){ render(); });
+      saveDoc();
+    }, 260);
+  });
+}
+
+/* ------------------------------------------------- manual scrub: wheel/drag */
+/* After a manual scrub, re-anchor the voice pointer here and drop the old
+   target — otherwise voice-follow would immediately yank the script back. */
+function afterScrub(){
+  finished = false;
+  if (voiceOn){ ptr = Math.max(0, lineAnchor()); voiceTarget = -1; if (S.highlight) highlight(ptr); }
+  paint(); updateStatus(); broadcast(false);
+}
+viewport.addEventListener('wheel', function(e){
+  if (PRESENT) return;
+  e.preventDefault();
+  pos = clamp(pos + e.deltaY, 0, maxPos);
+  afterScrub();
+}, { passive:false });
+
+var dragY = null, dragPos = 0;
+viewport.addEventListener('pointerdown', function(e){
+  if (PRESENT || e.target.closest('#overlay')) return;
+  dragY = e.clientY; dragPos = pos;
+  viewport.classList.add('dragging');
+  viewport.setPointerCapture(e.pointerId);
+});
+viewport.addEventListener('pointermove', function(e){
+  if (dragY === null) return;
+  var dy = (e.clientY - dragY) * (S.mirrorY ? -1 : 1);
+  pos = clamp(dragPos - dy, 0, maxPos);
+  afterScrub();
+});
+['pointerup','pointercancel'].forEach(function(ev){
+  viewport.addEventListener(ev, function(){ dragY = null; viewport.classList.remove('dragging'); });
+});
+
+/* ------------------------------------------------------------- keyboard */
+document.addEventListener('keydown', function(e){
+  var typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+  if (PRESENT){                       // the mirror window follows, it never drives
+    if (e.key === 'f' || e.key === 'F') toggleFullscreen();
+    else if (e.key === 'Escape' && document.fullscreenElement) document.exitFullscreen();
+    return;
+  }
+  if (e.key === 'Escape'){
+    if (document.body.classList.contains('zen')){ document.body.classList.remove('zen'); measure(); return; }
+    if (!$('editorWrap').hidden){ $('editorWrap').hidden = true; $('btnEdit').classList.remove('on'); measure(); return; }
+    if (document.fullscreenElement) document.exitFullscreen();
+    return;
+  }
+  if (typing) return;
+  var k = e.key;
+  switch (k){
+    case ' ': e.preventDefault(); toggle(); break;
+    case 'ArrowUp':   e.preventDefault(); setSpeed(S.speed + 5); break;
+    case 'ArrowDown': e.preventDefault(); setSpeed(S.speed - 5); break;
+    case 'ArrowRight': case 'PageDown':
+      e.preventDefault(); pos = clamp(pos + (k === 'PageDown' ? viewport.clientHeight * 0.6 : S.fontSize * S.lineHeight), 0, maxPos); finished = false; paint(); break;
+    case 'ArrowLeft': case 'PageUp':
+      e.preventDefault(); pos = clamp(pos - (k === 'PageUp' ? viewport.clientHeight * 0.6 : S.fontSize * S.lineHeight), 0, maxPos); finished = false; paint(); break;
+    case 'Home': e.preventDefault(); resetTop(); break;
+    case 'End':  e.preventDefault(); pos = maxPos; paint(); break;
+    case '+': case '=': setFont(S.fontSize + 4); break;
+    case '-': case '_': setFont(S.fontSize - 4); break;
+    default:
+      var l = k.toLowerCase();
+      if (l === 'm') $('btnMirror').click();
+      else if (l === 'v') toggleVoice();
+      else if (l === 'f') $('btnFull').click();
+      else if (l === 'e') $('btnEdit').click();
+      else if (l === 's') $('btnPanel').click();
+      else if (l === 'r') resetTop();
+      else if (l === 'z'){ document.body.classList.toggle('zen'); setTimeout(measure, 0); }
+  }
+});
+
+window.addEventListener('resize', function(){ preserveAnchor(function(){}); });
+
+/* ---------------------------------------------------------------- sample */
+var SAMPLE = [
+  '# Welcome',
+  '',
+  'This is your teleprompter. Replace this text with your own script — upload a file,',
+  'paste from the clipboard, or press E and type directly.',
+  '',
+  'Turn on the microphone button and simply start reading aloud. The script follows',
+  'your voice, keeping the line you are speaking on the red eye line. Slow down,',
+  'speed up, or pause to think — the text waits for you.',
+  '',
+  '[pause]',
+  '',
+  '# Controls worth knowing',
+  '',
+  'Space starts and stops. The up and down arrows change the scroll speed. Plus and',
+  'minus change the text size. M flips the text for a beam-splitter mirror rig, and Z',
+  'hides every control so only the words remain.',
+  '',
+  'A lead-in countdown gives you time to settle before the first line, and the hold at',
+  'the end keeps the camera rolling after the last word.',
+  '',
+  '# You are ready',
+  '',
+  'Load your script and record something good.'
+].join('\n');
+
+/* ------------------------------------------------------------------ init */
+loadSettings();
+applyStyle();
+if (!PRESENT){
+  wireUI(); syncUI(); renderLib();
+  var saved = null;
+  try{ saved = localStorage.getItem(LS_DOC); }catch(e){}
+  text = (saved !== null && saved !== '') ? saved : SAMPLE;
+  editor.value = text;
+  if (!SR) $('voiceHint').innerHTML = '<b>Heads up:</b> this browser has no speech recognition. Use Chrome or Edge for voice activation — everything else works here.';
+  else if (IS_FILE) $('voiceHint').innerHTML = '<b>Opened from a local file.</b> Chrome cannot remember microphone permission for <code>file://</code> pages, so it asks again every time listening restarts. Put the page on GitHub Pages (or run <code>python3 -m http.server</code> and open it via <code>localhost</code>) and it will ask exactly once. Everything else works from a file.';
+} else {
+  document.body.classList.add('present');
+}
+render();
+measure();
+updateStatus();
+raf = requestAnimationFrame(tick);
+setTimeout(measure, 120);
+window.addEventListener('load', function(){ setTimeout(measure, 60); });
+})();
+</script>
+</body>
+</html>
