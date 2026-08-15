@@ -247,7 +247,7 @@
       </details>
 
       <details class="group" open>
-        <summary>Text area &amp; colours</summary>
+        <summary>Text area &amp; colors</summary>
         <div class="body">
           <div class="row"><label>Width</label><input type="range" id="sWidth" min="30" max="100" step="1"><span class="val" id="vWidth"></span></div>
           <div class="row"><label>Side pad</label><input type="range" id="sPad" min="0" max="20" step="1"><span class="val" id="vPad"></span></div>
@@ -425,6 +425,67 @@ function norm(w){
   return w.toLowerCase().replace(/[^\p{L}\p{N}']/gu,'');
 }
 
+/* Voice tracking has to survive an imperfect transcriber. canon() folds the
+   confusions a speech recogniser makes most — spelled numbers vs digits, and
+   the common homophones — onto one form, so "two"/"2" and "their"/"there"
+   match the script instead of breaking the alignment. Applied to both the
+   script words and everything heard before they are compared. */
+var NUMWORD = { zero:'0', one:'1', two:'2', three:'3', four:'4', five:'5', six:'6',
+  seven:'7', eight:'8', nine:'9', ten:'10', eleven:'11', twelve:'12', thirteen:'13',
+  fourteen:'14', fifteen:'15', sixteen:'16', seventeen:'17', eighteen:'18',
+  nineteen:'19', twenty:'20', thirty:'30', forty:'40', fifty:'50', sixty:'60',
+  seventy:'70', eighty:'80', ninety:'90', hundred:'100', thousand:'1000',
+  first:'1', second:'2', third:'3', fourth:'4', fifth:'5' };
+/* One folding table, built once. Number words map to their digit. Homophone
+   groups map to a single form — and when a group contains a number word (two,
+   four, one, eight...) the whole group folds onto that digit, so the number/
+   digit and homophone equivalences stay consistent instead of fighting. */
+var CANON = {};
+for (var _nw in NUMWORD) CANON[_nw] = NUMWORD[_nw];
+[['to','too','two'],['there','their','theyre'],['your','youre'],['for','four','fore'],
+ ['no','know'],['right','write','rite'],['by','buy','bye'],['hear','here'],
+ ['our','are','hour'],['one','won'],['eight','ate'],['sea','see'],['son','sun'],
+ ['wood','would'],['knew','new'],['threw','through'],['break','brake'],['cell','sell'],
+ ['flower','flour'],['peace','piece'],['plane','plain'],['road','rode'],['role','roll'],
+ ['scene','seen'],['steal','steel'],['tail','tale'],['wait','weight'],['weather','whether'],
+ ['which','witch'],['week','weak'],['whose','whos'],['then','than'],
+ ['accept','except'],['affect','effect'],['loose','lose'],['were','wear','where']
+].forEach(function(g){
+  var target = g[0];
+  for (var i = 0; i < g.length; i++) if (NUMWORD[g[i]]){ target = NUMWORD[g[i]]; break; }
+  g.forEach(function(w){ CANON[w] = target; });
+});
+function canon(t){
+  if (!t) return t;
+  t = t.replace(/'/g,'');
+  return CANON[t] || t;
+}
+/* Levenshtein distance <= 1, cheap early-out version — lets a word the
+   recogniser mangled by a letter or two still land on the right script word. */
+function within1(a,b){
+  if (a === b) return true;
+  var la = a.length, lb = b.length;
+  if (Math.abs(la - lb) > 1) return false;
+  var i = 0, j = 0, diff = 0;
+  while (i < la && j < lb){
+    if (a[i] === b[j]){ i++; j++; }
+    else {
+      if (++diff > 1) return false;
+      if (la > lb) i++; else if (lb > la) j++; else { i++; j++; }
+    }
+  }
+  if (i < la || j < lb) diff++;
+  return diff <= 1;
+}
+/* 2 = exact/canonical hit, 1 = a near miss on a word long enough to trust,
+   0 = no match. Both sides are already canonical here. */
+function wordMatch(scriptTok, heardTok){
+  if (!scriptTok || !heardTok) return 0;
+  if (scriptTok === heardTok) return 2;
+  if (scriptTok.length >= 4 && heardTok.length >= 4 && within1(scriptTok, heardTok)) return 1;
+  return 0;
+}
+
 /* ------------------------------------------------------------ persistence */
 function saveSettings(){ try{ localStorage.setItem(LS_SET, JSON.stringify(S)); }catch(e){} }
 function loadSettings(){
@@ -486,7 +547,8 @@ function render(){
       var sp = document.createElement('span');
       sp.className = 'w'; sp.textContent = parts[j];
       div.appendChild(sp); div.appendChild(document.createTextNode(' '));
-      words.push({ el: sp, n: norm(parts[j]) });
+      var wn = norm(parts[j]);
+      words.push({ el: sp, n: wn, c: canon(wn) });
     }
     frag.appendChild(div);
   }
@@ -726,7 +788,10 @@ function startVoice(){
   if (!SR){ toast('This browser has no speech recognition — try Chrome or Edge.'); return; }
   try{
     rec = new SR();
-    rec.continuous = true; rec.interimResults = true; rec.lang = S.lang; rec.maxAlternatives = 1;
+    /* Ask for several guesses, not one. Chrome's top transcription is often
+       wrong where a lower-ranked alternative matches the script word for word,
+       so followSpeech aligns against whichever alternative fits best. */
+    rec.continuous = true; rec.interimResults = true; rec.lang = S.lang; rec.maxAlternatives = 5;
     rec.onresult = onResult;
     rec.onerror = function(e){
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed'){
@@ -824,13 +889,32 @@ function onResult(ev){
   }
   if (S.voiceMode === 'commands') return;
 
-  var tail = heard.split(/\s+/).map(norm).filter(Boolean).slice(-7);
-  if (tail.length) followSpeech(tail);
+  followSpeech(collectTails(ev));
 }
 
-/* Align the tail of what was heard against the words just ahead of the pointer. */
-function followSpeech(tail){
-  if (!words.length) return;
+/* Build one canonical word-tail per transcription alternative of the newest
+   result. Earlier results contribute a shared prefix so a short final phrase
+   still has context to align. Duplicate tails are dropped. */
+function collectTails(ev){
+  var prefix = '';
+  for (var i = ev.resultIndex; i < ev.results.length - 1; i++) prefix += ev.results[i][0].transcript + ' ';
+  var last = ev.results[ev.results.length - 1];
+  if (!last) return [];
+  var n = Math.min(last.length || 1, 5), tails = [], seen = {};
+  for (var a = 0; a < n; a++){
+    var tr = last[a] ? last[a].transcript : '';
+    var toks = (prefix + tr).split(/\s+/).map(function(w){ return canon(norm(w)); }).filter(Boolean).slice(-7);
+    if (!toks.length) continue;
+    var key = toks.join(' ');
+    if (seen[key]) continue;
+    seen[key] = 1; tails.push(toks);
+  }
+  return tails;
+}
+
+/* Score one tail against the words just ahead of the pointer, without moving
+   it. Returns the best end index plus its score and hit count. */
+function scoreTail(tail){
   var from = Math.max(0, ptr - 6), to = Math.min(words.length, ptr + 70);
   var best = -1, bestScore = 0, bestHits = 0;
   for (var end = from; end < to; end++){
@@ -838,17 +922,33 @@ function followSpeech(tail){
     for (var k = 0; k < tail.length; k++){
       var wi = end - (tail.length - 1 - k);
       if (wi < 0 || wi >= words.length) continue;
-      if (words[wi].n && words[wi].n === tail[k]){ score += (k + 1); hits++; }
+      var m = wordMatch(words[wi].c, tail[k]);
+      if (m){ score += (k + 1) * m; hits++; }
     }
     /* Nudge toward the nearest candidate: a repeated phrase later in the
        script must not outscore the one the reader is actually on. */
     score -= Math.abs(end - ptr) * 0.05;
     if (score > bestScore){ bestScore = score; bestHits = hits; best = end; }
   }
-  var need = tail.length >= 3 ? 2 : 1;
-  if (best < 0 || bestHits < need) return;
-  if (best < ptr - 4) return;              // ignore large backward jumps (echo / repeats)
-  ptr = best;
+  return { best: best, score: bestScore, hits: bestHits, len: tail.length };
+}
+
+/* Align the heard tail(s) against the script and advance the pointer to the
+   best-fitting alternative. Fuzzy, canonical matching keeps tracking alive
+   through the recogniser's homophones, near-misses and number spellings. */
+function followSpeech(tails){
+  if (!words.length || !tails.length) return;
+  var win = null;
+  for (var i = 0; i < tails.length; i++){
+    var r = scoreTail(tails[i]);
+    if (r.best < 0) continue;
+    if (!win || r.score > win.score) win = r;
+  }
+  if (!win) return;
+  var need = win.len >= 3 ? 2 : 1;
+  if (win.hits < need) return;
+  if (win.best < ptr - 4) return;          // ignore large backward jumps (echo / repeats)
+  ptr = win.best;
   if (!playing) play();
   scrollToWord(ptr, false);
   if (S.highlight) highlight(ptr);
