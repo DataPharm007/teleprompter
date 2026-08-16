@@ -916,12 +916,13 @@ function collectTails(ev){
   return tails;
 }
 
-/* Score one tail against the words just ahead of the pointer, without moving
-   it. Returns the best end index plus its score and hit count. */
-function scoreTail(tail){
-  var from = Math.max(0, ptr - 6), to = Math.min(words.length, ptr + 70);
+/* Best alignment of a tail within a word range [lo,hi), scored against the
+   pointer. Proximity is weighted so the copy the reader is actually on beats
+   an identical phrase elsewhere in the script. Returns end index + hits. */
+function bestIn(tail, lo, hi){
+  lo = Math.max(0, lo); hi = Math.min(words.length, hi);
   var best = -1, bestScore = 0, bestHits = 0, bestStrong = 0;
-  for (var end = from; end < to; end++){
+  for (var end = lo; end < hi; end++){
     var score = 0, hits = 0, strong = 0;
     for (var k = 0; k < tail.length; k++){
       var wi = end - (tail.length - 1 - k);
@@ -929,33 +930,34 @@ function scoreTail(tail){
       var m = wordMatch(words[wi].c, tail[k]);
       if (m){ score += (k + 1) * m; hits++; if (m === 2) strong++; }
     }
-    /* Nudge toward the nearest candidate: a repeated phrase later in the
-       script must not outscore the one the reader is actually on. */
-    score -= Math.abs(end - ptr) * 0.05;
+    score -= Math.abs(end - ptr) * 0.15;
     if (score > bestScore){ bestScore = score; bestHits = hits; bestStrong = strong; best = end; }
   }
-  return { best: best, score: bestScore, hits: bestHits, strong: bestStrong, len: tail.length };
+  return { best: best, score: bestScore, hits: bestHits, strong: bestStrong };
 }
 
-/* Align the heard tail(s) against the script and advance the pointer to the
-   best-fitting alternative. Fuzzy, canonical matching keeps tracking alive
-   through the recogniser's homophones, near-misses and number spellings. */
+/* Advance the pointer to the best-fitting alternative. Two regimes keep a
+   repeated phrase from hijacking the reader:
+   CONTINUITY — a small move around the pointer, where reading normally lives.
+     Needs a couple of hits and one exact anchor.
+   RECOVERY — a bigger jump (either direction) is only trusted with strong
+     contiguous evidence (3+ exact words), so an ambiguous two-word phrase like
+     "the text" can never leap to another copy of itself down the script. */
 function followSpeech(tails){
   if (!words.length || !tails.length) return;
   var win = null;
   for (var i = 0; i < tails.length; i++){
-    var r = scoreTail(tails[i]);
-    if (r.best < 0) continue;
-    if (!win || r.score > win.score) win = r;
+    var tail = tails[i], len = tail.length, need = len >= 3 ? 2 : 1, cand = null;
+    var near = bestIn(tail, ptr - 6, ptr + len + 8);
+    if (near.best >= 0 && near.hits >= need && near.strong >= 1 && near.best >= ptr - 4){
+      cand = near;
+    } else {
+      var far = bestIn(tail, ptr - 40, ptr + 70);
+      if (far.best >= 0 && far.hits >= 3 && far.strong >= 3) cand = far;
+    }
+    if (cand && (!win || cand.score > win.score)) win = cand;
   }
   if (!win) return;
-  var need = win.len >= 3 ? 2 : 1;
-  if (win.hits < need) return;
-  /* A lone near-miss must never move the pointer — that is what let a stray
-     "control" downstream hijack the reader on "controls worth knowing".
-     Demand at least one exact/canonical anchor in the winning alignment. */
-  if (win.strong < 1) return;
-  if (win.best < ptr - 4) return;          // ignore large backward jumps (echo / repeats)
   ptr = win.best;
   if (!playing) play();
   scrollToWord(ptr, false);
