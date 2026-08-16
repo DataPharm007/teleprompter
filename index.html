@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Teleprompter</title>
 <meta name="description" content="A voice-activated teleprompter that runs entirely in your browser.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127908;</text></svg>">
@@ -170,6 +173,15 @@
     z-index:50;opacity:0;transition:opacity .2s;pointer-events:none;box-shadow:0 6px 22px rgba(0,0,0,.5);
   }
   .toast.show{opacity:1}
+
+  /* floating exit — only while zen (the mobile "full view" fallback) hides the topbar */
+  #zenExit{
+    position:fixed;z-index:60;display:none;
+    top:calc(12px + env(safe-area-inset-top));right:calc(12px + env(safe-area-inset-right));
+    opacity:.55;box-shadow:0 4px 16px rgba(0,0,0,.5);
+  }
+  #zenExit:hover,#zenExit:active{opacity:1}
+  body.zen #zenExit{display:block}
 
   body.present .topbar,body.present #panel,body.present .status,body.present #editorWrap{display:none}
   body.zen .topbar,body.zen #panel,body.zen .status,body.zen #editorWrap{display:none}
@@ -377,6 +389,7 @@
     </section>
   </div>
 </div>
+<button class="btn" id="zenExit" title="Exit full view (Esc)" aria-label="Exit full view">✕ Exit</button>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -743,8 +756,19 @@ function pause(){
 }
 function toggle(){ playing ? pause() : play(); }
 function toggleFullscreen(){
-  if (document.fullscreenElement) document.exitFullscreen();
-  else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen();
+  /* True fullscreen where the browser supports it (desktop, Android Chrome). */
+  if (document.fullscreenEnabled && document.documentElement.requestFullscreen){
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen();
+    return;
+  }
+  /* iOS Safari has no Fullscreen API for page elements, so fall back to zen
+     mode — it hides all of the app's own chrome for a full-screen prompter.
+     The floating exit button (shown only in zen) is how you leave on a phone. */
+  var on = !document.body.classList.contains('zen');
+  document.body.classList.toggle('zen', on);
+  setTimeout(measure, 0);
+  if (on) toast('Full view — tap ✕ (top right) to exit');
 }
 function resetTop(){
   pos = 0; ptr = 0; elapsed = 0; finished = false; lastMarker = -1; voiceTarget = -1;
@@ -1245,6 +1269,7 @@ function wireUI(){
     setTimeout(function(){ measure(); if (!w.hidden) editor.focus(); }, 0);
   };
   $('btnFull').onclick = toggleFullscreen;
+  $('zenExit').onclick = function(){ document.body.classList.remove('zen'); setTimeout(measure, 0); };
   $('btnPresent').onclick = function(){
     window.open(location.pathname + '?present=1', 'tp_present', 'width=1024,height=680');
     setTimeout(function(){ broadcast(true); }, 700);
