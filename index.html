@@ -37,6 +37,8 @@
     display:flex;align-items:center;gap:6px;flex-wrap:wrap;
     padding:8px 10px;background:var(--ui-bg2);border-bottom:1px solid var(--ui-line);
     padding-top:max(8px,env(safe-area-inset-top));
+    padding-left:max(10px,env(safe-area-inset-left));
+    padding-right:max(10px,env(safe-area-inset-right));
   }
   .brand{font-weight:700;letter-spacing:.4px;margin-right:6px;white-space:nowrap}
   .brand span{color:var(--ui-accent)}
@@ -161,6 +163,8 @@
     padding:6px 10px;background:var(--ui-bg2);border-top:1px solid var(--ui-line);
     font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ui-dim);
     padding-bottom:max(6px,env(safe-area-inset-bottom));
+    padding-left:max(10px,env(safe-area-inset-left));
+    padding-right:max(10px,env(safe-area-inset-right));
   }
   .status b{color:var(--ui-fg);font-weight:600}
   #progress{flex:1 1 120px;height:5px;min-width:80px;background:#2b303b;border-radius:3px;overflow:hidden}
@@ -186,12 +190,15 @@
   body.present .topbar,body.present #panel,body.present .status,body.present #editorWrap{display:none}
   body.zen .topbar,body.zen #panel,body.zen .status,body.zen #editorWrap{display:none}
   @media (max-width:860px){
-    #panel{position:absolute;z-index:20;top:0;bottom:0;left:0;width:min(322px,88vw);flex-basis:auto;box-shadow:0 0 40px rgba(0,0,0,.6)}
+    #panel{position:absolute;z-index:20;top:env(safe-area-inset-top);bottom:0;left:env(safe-area-inset-left);width:min(322px,88vw);flex-basis:auto;box-shadow:0 0 40px rgba(0,0,0,.6)}
     .brand{display:none}
     #editorWrap{flex-basis:44%}
   }
   @media (max-width:560px){
-    .topbar{gap:4px;padding:6px}
+    .topbar{gap:4px;padding:6px;
+      padding-top:max(6px,env(safe-area-inset-top));
+      padding-left:max(6px,env(safe-area-inset-left));
+      padding-right:max(6px,env(safe-area-inset-right));}
     .btn{padding:6px 9px;font-size:13px}
     #btnPresent{display:none}          /* a second screen makes no sense on a phone */
     #jump{flex:1 1 100%;max-width:none!important}
