@@ -70,6 +70,11 @@
   }
 
   /* ---------- settings panel ---------- */
+  .panelHead{
+    position:sticky;top:-12px;z-index:2;margin:-12px -12px 10px;padding:10px 12px;
+    display:flex;align-items:center;justify-content:space-between;
+    background:var(--ui-bg2);border-bottom:1px solid var(--ui-line);font-weight:700;
+  }
   .group{border:1px solid var(--ui-line);border-radius:var(--radius);margin-bottom:10px;background:#191d24}
   .group>summary{
     padding:9px 11px;cursor:pointer;font-weight:600;list-style:none;
@@ -200,6 +205,11 @@
 
   <div class="main">
     <aside id="panel" hidden>
+
+      <div class="panelHead">
+        <span>Settings</span>
+        <button class="btn" id="btnPanelClose" title="Close settings (S or Esc)" aria-label="Close settings">✕ Close</button>
+      </div>
 
       <details class="group" open>
         <summary>Script</summary>
@@ -1226,7 +1236,9 @@ function wireUI(){
   $('btnReset').onclick = resetTop;
   $('btnVoice').onclick = toggleVoice;
   $('btnMirror').onclick = function(){ S.mirrorX = !S.mirrorX; applyStyle(); syncUI(); saveSettings(); broadcast(true); };
-  $('btnPanel').onclick = function(){ $('panel').hidden = !$('panel').hidden; this.classList.toggle('on', !$('panel').hidden); setTimeout(measure, 0); };
+  function setPanel(open){ $('panel').hidden = !open; $('btnPanel').classList.toggle('on', open); setTimeout(measure, 0); }
+  $('btnPanel').onclick = function(){ setPanel($('panel').hidden); };
+  $('btnPanelClose').onclick = function(){ setPanel(false); };
   $('btnEdit').onclick = function(){
     var w = $('editorWrap'); w.hidden = !w.hidden;
     this.classList.toggle('on', !w.hidden);
@@ -1327,6 +1339,7 @@ document.addEventListener('keydown', function(e){
   }
   if (e.key === 'Escape'){
     if (document.body.classList.contains('zen')){ document.body.classList.remove('zen'); measure(); return; }
+    if (!$('panel').hidden){ $('btnPanelClose').click(); return; }
     if (!$('editorWrap').hidden){ $('editorWrap').hidden = true; $('btnEdit').classList.remove('on'); measure(); return; }
     if (document.fullscreenElement) document.exitFullscreen();
     return;
