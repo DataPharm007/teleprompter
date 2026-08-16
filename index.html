@@ -534,14 +534,18 @@ function render(){
       chip.className = 'marker'; chip.textContent = '⏸ PAUSE';
       div.appendChild(chip); frag.appendChild(div); continue;
     }
-    if (/^#{1,6}\s+/.test(t)){
+    var isHead = /^#{1,6}\s+/.test(t);
+    if (isHead){
       div.className = 'line h';
-      div.textContent = t.replace(/^#{1,6}\s+/,'');
+      t = t.replace(/^#{1,6}\s+/,'');
       div.setAttribute('data-section', String(sections.length));
-      sections.push({ title: div.textContent, el: div });
-      frag.appendChild(div); continue;
+      sections.push({ title: t, el: div });
+    } else {
+      div.className = 'line';
     }
-    div.className = 'line';
+    /* Heading words are tracked too — reading a heading aloud should advance
+       the prompter, and leaving its words out of the array left a blind spot
+       where the tracker would jump to a repeat of the word further down. */
     var parts = t.split(/\s+/);
     for (var j=0; j<parts.length; j++){
       var sp = document.createElement('span');
@@ -916,21 +920,21 @@ function collectTails(ev){
    it. Returns the best end index plus its score and hit count. */
 function scoreTail(tail){
   var from = Math.max(0, ptr - 6), to = Math.min(words.length, ptr + 70);
-  var best = -1, bestScore = 0, bestHits = 0;
+  var best = -1, bestScore = 0, bestHits = 0, bestStrong = 0;
   for (var end = from; end < to; end++){
-    var score = 0, hits = 0;
+    var score = 0, hits = 0, strong = 0;
     for (var k = 0; k < tail.length; k++){
       var wi = end - (tail.length - 1 - k);
       if (wi < 0 || wi >= words.length) continue;
       var m = wordMatch(words[wi].c, tail[k]);
-      if (m){ score += (k + 1) * m; hits++; }
+      if (m){ score += (k + 1) * m; hits++; if (m === 2) strong++; }
     }
     /* Nudge toward the nearest candidate: a repeated phrase later in the
        script must not outscore the one the reader is actually on. */
     score -= Math.abs(end - ptr) * 0.05;
-    if (score > bestScore){ bestScore = score; bestHits = hits; best = end; }
+    if (score > bestScore){ bestScore = score; bestHits = hits; bestStrong = strong; best = end; }
   }
-  return { best: best, score: bestScore, hits: bestHits, len: tail.length };
+  return { best: best, score: bestScore, hits: bestHits, strong: bestStrong, len: tail.length };
 }
 
 /* Align the heard tail(s) against the script and advance the pointer to the
@@ -947,6 +951,10 @@ function followSpeech(tails){
   if (!win) return;
   var need = win.len >= 3 ? 2 : 1;
   if (win.hits < need) return;
+  /* A lone near-miss must never move the pointer — that is what let a stray
+     "control" downstream hijack the reader on "controls worth knowing".
+     Demand at least one exact/canonical anchor in the winning alignment. */
+  if (win.strong < 1) return;
   if (win.best < ptr - 4) return;          // ignore large backward jumps (echo / repeats)
   ptr = win.best;
   if (!playing) play();
