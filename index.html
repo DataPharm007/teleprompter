@@ -342,6 +342,8 @@
           <label class="chk"><input type="checkbox" id="sGrid"> Show framing grid (rule of thirds)</label>
           <label class="chk"><input type="checkbox" id="sAutoRoll"> Record button also starts the lead-in &amp; scroll</label>
           <label class="chk"><input type="checkbox" id="sMicRec"> Record audio with the video</label>
+          <label class="chk"><input type="checkbox" id="sToDisk"> Record straight to disk (long takes — pick a file first)</label>
+          <p class="hint" id="diskHint">Streams the take to a file you choose as it records, so length is limited only by drive space, not memory. Desktop Chrome/Edge; elsewhere it records to memory as usual.</p>
           <p class="hint" id="camHint">The live camera sits behind your words so you can read straight down the lens.
           Recording captures the camera only — the text is never in your footage. Everything stays on this device.</p>
         </div>
@@ -562,7 +564,7 @@ var S = {
   speed:60, autoScroll:false, mirrorX:false, mirrorY:false, loop:false, markers:true, wake:true,
   before:3, after:5, beep:true,
   voiceMode:'follow', lang:'en-US', ease:12, highlight:true,
-  camQuality:'1080', scrim:38, mirrorPrev:true, grid:false, autoRoll:true, micRec:true, camId:''
+  camQuality:'1080', scrim:38, mirrorPrev:true, grid:false, autoRoll:true, micRec:true, camId:'', toDisk:false
 };
 /* Google Drive keys live only on this device. Fill DRIVE_CONFIG here to ship a
    build where Drive works out of the box, or leave blank and paste the keys
@@ -593,6 +595,7 @@ var camStream = null, camOn = false, camFacing = 'user';
 var mediaRec = null, recChunks = [], recording = false, recPaused = false;
 var recStartAt = 0, recPausedMs = 0, recPauseAt = 0, recTimer = null, recMime = '';
 var lastBlob = null, lastBlobUrl = null;
+var diskWritable = null, diskChain = null, diskName = '';   /* record-straight-to-disk */
 var audioCtxM = null, meterRaf = 0, meterAnalyser = null;
 
 /* google drive */
@@ -1100,6 +1103,8 @@ function pickMime(){
 }
 function recElapsedMs(){ return recording ? (performance.now() - recStartAt) : recLastMs; }
 function updateRecTime(){ $('recTime').textContent = fmt(recElapsedMs() / 1000); }
+function mimeExt(m){ return (m && m.indexOf('mp4') >= 0) ? 'mp4' : 'webm'; }
+function diskSupported(){ return typeof window.showSaveFilePicker === 'function'; }
 function startRec(){
   if (!camOn){ startCam(); toast('Turning the camera on first — tap Record again'); return; }
   if (!camStream || recording) return;
@@ -1119,7 +1124,19 @@ function startRec(){
       catch(e2){ toast('Recording isn’t supported here.'); return; }
     }
     recChunks = [];
-    mediaRec.ondataavailable = function(e){ if (e.data && e.data.size) recChunks.push(e.data); };
+    if (diskWritable){
+      /* Disk mode: append each flushed chunk to the chosen file as it arrives, so
+         nothing accumulates in memory — length is bounded only by free space.
+         Writes are chained to keep them strictly in order. */
+      diskChain = Promise.resolve();
+      mediaRec.ondataavailable = function(e){
+        if (!e.data || !e.data.size || !diskWritable) return;
+        var d = e.data;
+        diskChain = diskChain.then(function(){ return diskWritable.write(d); }).catch(function(){});
+      };
+    } else {
+      mediaRec.ondataavailable = function(e){ if (e.data && e.data.size) recChunks.push(e.data); };
+    }
     mediaRec.onstop = finishRec;
     /* Flush every second rather than buffering the whole take. Without a
        timeslice, Chrome's muxer can hold video frames waiting on audio and the
@@ -1136,11 +1153,29 @@ function startRec(){
   /* One-tap: Record runs the lead-in countdown, then rolls scroll + capture
      together on a silent "GO" — zero delay, and no beep in the take (the 3·2·1
      beeps land before capture starts). Independent mode just starts capturing. */
-  if (S.autoRoll && S.before > 0 && pos < 1){
-    resetTop();
-    runCountdown(S.before, 'Get ready', begin, true);   /* silent GO, zero delay */
+  var proceed = function(){
+    if (S.autoRoll && S.before > 0 && pos < 1){
+      resetTop();
+      runCountdown(S.before, 'Get ready', begin, true);   /* silent GO, zero delay */
+    }
+    else begin();
+  };
+  /* Disk mode must open the destination file NOW, inside the click gesture
+     (showSaveFilePicker needs user activation), before any countdown runs. */
+  if (S.toDisk && diskSupported()){
+    var ext = mimeExt(recMime), name = (scriptBaseName().replace(/\s+/g, '-') || 'take') + '.' + ext;
+    var accept = {}; accept[recMime && recMime.indexOf('mp4') >= 0 ? 'video/mp4' : 'video/webm'] = ['.' + ext];
+    window.showSaveFilePicker({ suggestedName:name, types:[{ description:'Video', accept:accept }] })
+      .then(function(h){ diskName = h.name || name; return h.createWritable(); })
+      .then(function(w){ diskWritable = w; toast('Recording to ' + diskName); proceed(); })
+      .catch(function(e){
+        if (e && e.name === 'AbortError'){ toast('Recording canceled'); return; }
+        diskWritable = null; toast('Couldn’t open that file — recording to memory instead.'); proceed();
+      });
+    return;
   }
-  else begin();
+  diskWritable = null;
+  proceed();
 }
 function stopRec(){
   if (!recording || !mediaRec) return;
@@ -1220,6 +1255,15 @@ function repairSafariMp4(blob){
   }).catch(function(){ return blob; });
 }
 function finishRec(){
+  /* Disk mode: flush the remaining writes and close the file. Nothing is held in
+     memory, so there's no review blob — the finished file is already on disk. */
+  if (diskWritable){
+    var w = diskWritable, nm = diskName; diskWritable = null;
+    (diskChain || Promise.resolve()).then(function(){ return w.close(); })
+      .then(function(){ toast('Saved to ' + (nm || 'disk')); })
+      .catch(function(){ try{ w.close(); }catch(e){} toast('Recording saved (close may be incomplete).'); });
+    return;
+  }
   if (!recChunks.length) return;
   var type = recMime || (recChunks[0] && recChunks[0].type) || 'video/webm';
   var blob = new Blob(recChunks, { type:type }); recChunks = [];
@@ -1808,6 +1852,7 @@ function syncUI(){
   $('sScrim').value = S.scrim; $('vScrim').textContent = S.scrim + '%';
   $('sMirrorPrev').checked = S.mirrorPrev; $('sGrid').checked = S.grid;
   $('sAutoRoll').checked = S.autoRoll; $('sMicRec').checked = S.micRec;
+  $('sToDisk').checked = S.toDisk;
   $('sCamDevice').value = S.camId || '';
   [].forEach.call($('sAlign').children, function(b){ b.classList.toggle('on', b.dataset.v === S.align); });
   $('sMirror').children[0].classList.toggle('on', S.mirrorX);
@@ -1886,6 +1931,7 @@ function wireUI(){
   bindCheck('sGrid','grid');
   bindCheck('sAutoRoll','autoRoll');
   bindCheck('sMicRec','micRec', function(){ if (camOn) startCam(); });
+  bindCheck('sToDisk','toDisk');
 
   /* review modal */
   $('reviewClose').onclick = closeReview;
@@ -2100,6 +2146,10 @@ if (!PRESENT){
     $('camHint').innerHTML = '<b>This browser can’t open a camera.</b> Camera recording needs a secure page (https or localhost) and a modern browser — on iPhone/iPad use Safari, on Android use Chrome.';
   } else if (typeof MediaRecorder === 'undefined'){
     $('camHint').innerHTML = 'Your camera will show as a reading surface, but this browser can’t record video. For recording, use Safari (iPhone/iPad) or Chrome/Edge.';
+  }
+  if (!diskSupported()){
+    $('sToDisk').checked = false; $('sToDisk').disabled = true; S.toDisk = false;
+    $('diskHint').innerHTML = 'Record-straight-to-disk needs desktop Chrome or Edge (File System Access API). On this browser, takes record to memory and you save afterwards.';
   }
   if (IS_FILE){
     /* The keyless "Open from Drive" uses the OS file picker, which works even on

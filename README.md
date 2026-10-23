@@ -26,6 +26,10 @@ take — the teleprompter text is only on your screen, never burned into the vid
   picker so you can write straight to an **external SSD/USB drive** or any folder), **Share /
   Save to Photos** (phones — into your camera roll, or Save to Files to reach a plugged-in
   drive), **Save to Drive**, or **Discard**. Files are named from your script title and date.
+- **Record straight to disk** (desktop Chrome/Edge) — pick a destination file *before* you
+  roll and the take streams to it as it records, so nothing is held in memory and length is
+  limited only by free space. Ideal for long sessions. Elsewhere, takes record to memory and
+  you save afterward (bitrate is bounded to keep even in-memory long takes stable).
 
 > Recording uses the browser's `MediaRecorder`. On iPhone/iPad use **Safari**; on Android use
 > **Chrome**. The page tells you if a browser can't record. Output is `.mp4` where supported,
