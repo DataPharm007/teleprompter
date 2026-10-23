@@ -304,14 +304,16 @@
           <div class="row">
             <button class="btn" id="btnDriveOpen" style="flex:1">☁️ Open from Google Drive</button>
           </div>
-          <p class="hint" id="driveHint">On iPhone/iPad this opens the <b>Files</b> browser — tap <b>Google&nbsp;Drive</b> there to load a script,
-          including Google&nbsp;Docs. No sign-in, no setup. (On a computer, install Drive for Desktop so Drive shows in the picker.)</p>
+          <input type="file" id="fileDrive" hidden>
+          <p class="hint" id="driveHint">Opens your <b>Files</b> browser — pick <b>Google&nbsp;Drive</b> there (incl. Google&nbsp;Docs). No sign-in.
+          <br><b>Don't see Drive in the list?</b> Enable it once: open the <b>Files</b> app → <b>Browse</b> → <b>•••</b> → <b>Edit</b> → toggle <b>Google&nbsp;Drive</b> on.
+          (Needs the Google Drive app installed and signed in. On a computer, install Drive for Desktop.)</p>
           <div class="row">
             <button class="btn" id="btnDrivePicker" style="flex:1;font-size:12px">⌕ Browse Drive in-app</button>
             <button class="btn" id="btnDriveSave" style="flex:1;font-size:12px">☁️ Save to Drive</button>
           </div>
-          <p class="hint">In-app browse &amp; save use the Google API and a one-time key —
-          <a href="#" id="driveSetup">set it up</a> (optional; handy on desktop, <code>drive.file</code> scope only).</p>
+          <p class="hint">Can't get Drive into Files? Use the in-app browser instead — it works anywhere but needs a
+          one-time Google key. <a href="#" id="driveSetup">Set it up</a> (<code>drive.file</code> scope only).</p>
           <div class="lib" id="lib"></div>
           <p class="hint">Drag &amp; drop a file anywhere. Supports .txt .md .html .rtf .srt .vtt .docx — or just paste.
           Lines starting with <code>#</code> become section headings; a line reading <code>[pause]</code> stops the scroll there.</p>
@@ -1803,8 +1805,11 @@ function wireUI(){
 
   /* google drive */
   /* Keyless: the OS file picker shows Google Drive as a location on phone/tablet
-     (and on desktop with Drive for Desktop) — no OAuth, nothing to sign into. */
-  $('btnDriveOpen').onclick = function(){ $('file').click(); toast('Choose Google Drive in the file browser'); };
+     (and on desktop with Drive for Desktop) — no OAuth, nothing to sign into.
+     Uses an UNrestricted input so every provider/location shows in the browser;
+     Drive must be enabled once in the Files app (Browse → ••• → Edit → toggle). */
+  $('btnDriveOpen').onclick = function(){ $('fileDrive').click(); toast('Tap “Browse”, then choose Google Drive'); };
+  $('fileDrive').onchange = function(){ if (this.files[0]) loadFile(this.files[0]); this.value = ''; };
   $('btnDrivePicker').onclick = driveOpen;   /* in-app OAuth Picker (optional) */
   $('btnDriveSave').onclick = driveSaveScript;
   $('driveSetup').onclick = function(e){ e.preventDefault(); openDriveSetup(); };
