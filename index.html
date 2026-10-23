@@ -7,8 +7,12 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Teleprompter</title>
-<meta name="description" content="A voice-activated teleprompter that runs entirely in your browser.">
+<meta name="description" content="A voice-activated teleprompter that records with your own camera — runs entirely in your browser.">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-title" content="Teleprompter">
+<link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127908;</text></svg>">
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><rect width='180' height='180' rx='34' fill='%2314161a'/><text x='90' y='128' font-size='104' text-anchor='middle'>&#127908;</text></svg>">
 <style>
   :root{
     --ui-bg:#14161a; --ui-bg2:#1c1f26; --ui-line:#2b303b; --ui-fg:#e7eaf0; --ui-dim:#98a1b3;
@@ -157,6 +161,57 @@
   #ovNum{font-size:min(34vh,240px);line-height:1;font-weight:800;font-variant-numeric:tabular-nums}
   #ovLabel{font-size:min(4vh,26px);letter-spacing:.22em;text-transform:uppercase;opacity:.75}
 
+  /* ---------- camera ---------- */
+  /* The live camera sits BEHIND the text as a reading surface. MediaRecorder
+     records this raw stream only — the prompter text is never burned in, so
+     your footage is clean and the words are just a reading aid on the glass. */
+  #cam{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000;z-index:0;display:none}
+  body.cam #cam{display:block}
+  body.cam #viewport{background:#000;cursor:default}
+  /* A scrim keeps the words readable over any camera background. */
+  #camScrim{position:absolute;inset:0;z-index:1;pointer-events:none;display:none;background:rgba(0,0,0,var(--scrim,.38))}
+  body.cam #camScrim{display:block}
+  body.cam #flip{z-index:2}
+  body.cam #readline,body.cam .fade{z-index:3}
+  /* Rule-of-thirds + center framing guide. */
+  #grid{position:absolute;inset:0;z-index:3;pointer-events:none;display:none}
+  body.cam.grid #grid{display:block}
+  #grid::before,#grid::after{content:"";position:absolute;background:rgba(255,255,255,.28)}
+  #grid::before{left:33.33%;right:33.33%;top:0;bottom:0;border-left:1px solid rgba(255,255,255,.28);border-right:1px solid rgba(255,255,255,.28);background:none}
+  #grid::after{top:33.33%;bottom:33.33%;left:0;right:0;border-top:1px solid rgba(255,255,255,.28);border-bottom:1px solid rgba(255,255,255,.28);background:none}
+  /* Recording dot + elapsed, always visible while rolling (even in zen). */
+  #recBadge{
+    position:absolute;z-index:6;top:calc(10px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);
+    display:none;align-items:center;gap:8px;background:rgba(0,0,0,.55);border-radius:999px;
+    padding:6px 14px;font:13px ui-monospace,Menlo,monospace;letter-spacing:.05em;
+  }
+  body.rec #recBadge{display:flex}
+  #recDot{width:11px;height:11px;border-radius:50%;background:#e5484d;animation:recpulse 1.1s infinite}
+  body.rec.paused #recDot{animation:none;opacity:.45}
+  @keyframes recpulse{0%,100%{opacity:1}50%{opacity:.25}}
+  /* Live mic level so you know audio is being captured. */
+  #meter{width:60px;height:5px;border-radius:3px;background:#2b303b;overflow:hidden;display:none}
+  body.cam #meter{display:inline-block}
+  #meter i{display:block;height:100%;width:0;background:#2f9e5e;transition:width .08s linear}
+
+  /* ---------- review + drive modals ---------- */
+  .modal{position:fixed;inset:0;z-index:70;display:flex;align-items:center;justify-content:center;
+    background:rgba(0,0,0,.78);backdrop-filter:blur(3px);padding:18px}
+  .modal[hidden]{display:none}
+  .sheet{background:var(--ui-bg2);border:1px solid var(--ui-line);border-radius:14px;
+    width:min(560px,100%);max-height:90vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  .sheet .shead{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--ui-line);font-weight:700}
+  .sheet .sbody{padding:16px}
+  .sheet video{width:100%;border-radius:10px;background:#000;display:block;margin-bottom:12px}
+  .sheet .actions{display:flex;flex-wrap:wrap;gap:8px}
+  .sheet .actions .btn{flex:1 1 auto;justify-content:center;min-width:120px}
+  .sheet p{color:var(--ui-dim);margin:8px 0}
+  .sheet input[type=text]{width:100%;margin:6px 0 2px}
+  .sheet code{background:#0f1116;padding:1px 5px;border-radius:4px}
+  .sheet a{color:var(--ui-accent)}
+  .btn.danger{background:#3a1f22;border-color:#5a2b2f}
+  .btn.danger:hover{background:#4a272b}
+
   /* ---------- status bar ---------- */
   .status{
     display:flex;align-items:center;gap:12px;flex-wrap:wrap;
@@ -212,6 +267,9 @@
     <div class="brand">TELE<span>PROMPTER</span></div>
     <button class="btn primary" id="btnPlay" title="Play / Pause (Space)">▶ Start</button>
     <button class="btn" id="btnReset" title="Back to top (R)">⭯ Top</button>
+    <button class="btn" id="btnCam" title="Camera — record yourself while you read (C)">📷 Camera</button>
+    <button class="btn rec" id="btnRecord" title="Record (G)" disabled>⏺ Record</button>
+    <span id="meter" title="Mic level"><i id="meterBar"></i></span>
     <button class="btn rec" id="btnVoice" title="Voice activation (V)">🎙 Voice</button>
     <button class="btn" id="btnMirror" title="Mirror horizontally (M)">⇄ Mirror</button>
     <button class="btn" id="btnEdit" title="Edit script (E)">✎ Edit</button>
@@ -243,9 +301,47 @@
             <button class="btn" id="btnSave" style="flex:1">💾 Save</button>
             <button class="btn" id="btnExport" style="flex:1">⭳ .txt</button>
           </div>
+          <div class="row">
+            <button class="btn" id="btnDriveOpen" style="flex:1">☁️ Open from Google Drive</button>
+          </div>
+          <p class="hint" id="driveHint">On iPhone/iPad this opens the <b>Files</b> browser — tap <b>Google&nbsp;Drive</b> there to load a script,
+          including Google&nbsp;Docs. No sign-in, no setup. (On a computer, install Drive for Desktop so Drive shows in the picker.)</p>
+          <div class="row">
+            <button class="btn" id="btnDrivePicker" style="flex:1;font-size:12px">⌕ Browse Drive in-app</button>
+            <button class="btn" id="btnDriveSave" style="flex:1;font-size:12px">☁️ Save to Drive</button>
+          </div>
+          <p class="hint">In-app browse &amp; save use the Google API and a one-time key —
+          <a href="#" id="driveSetup">set it up</a> (optional; handy on desktop, <code>drive.file</code> scope only).</p>
           <div class="lib" id="lib"></div>
           <p class="hint">Drag &amp; drop a file anywhere. Supports .txt .md .html .rtf .srt .vtt .docx — or just paste.
           Lines starting with <code>#</code> become section headings; a line reading <code>[pause]</code> stops the scroll there.</p>
+        </div>
+      </details>
+
+      <details class="group" open>
+        <summary>Camera &amp; recording</summary>
+        <div class="body">
+          <div class="row">
+            <button class="btn" id="btnCamToggle" style="flex:1">📷 Turn camera on</button>
+            <button class="btn" id="btnCamFlip" style="flex:1" disabled>🔄 Flip</button>
+          </div>
+          <div class="row"><label>Camera</label>
+            <select id="sCamDevice"><option value="">Default camera</option></select>
+          </div>
+          <div class="row"><label>Quality</label>
+            <select id="sCamQuality">
+              <option value="720">720p</option>
+              <option value="1080">1080p (HD)</option>
+              <option value="2160">4K (if supported)</option>
+            </select>
+          </div>
+          <div class="row"><label>Scrim</label><input type="range" id="sScrim" min="0" max="85" step="1"><span class="val" id="vScrim"></span></div>
+          <label class="chk"><input type="checkbox" id="sMirrorPrev"> Mirror my preview (front camera) — recording stays correct</label>
+          <label class="chk"><input type="checkbox" id="sGrid"> Show framing grid (rule of thirds)</label>
+          <label class="chk"><input type="checkbox" id="sAutoRoll"> Record button also starts the lead-in &amp; scroll</label>
+          <label class="chk"><input type="checkbox" id="sMicRec"> Record audio with the video</label>
+          <p class="hint" id="camHint">The live camera sits behind your words so you can read straight down the lens.
+          Recording captures the camera only — the text is never in your footage. Everything stays on this device.</p>
         </div>
       </details>
 
@@ -364,12 +460,16 @@
 
     <section class="stage">
       <div id="viewport">
+        <video id="cam" autoplay muted playsinline></video>
+        <div id="camScrim"></div>
+        <div id="grid"></div>
         <div id="flip">
           <div id="track"><div id="script"></div></div>
         </div>
         <div class="fade t" id="fadeT"></div>
         <div class="fade b" id="fadeB"></div>
         <div id="readline"></div>
+        <div id="recBadge"><span id="recDot"></span><span id="recTime">0:00</span></div>
         <div id="overlay" hidden><div id="ovNum">3</div><div id="ovLabel">Get ready</div></div>
       </div>
 
@@ -397,6 +497,51 @@
   </div>
 </div>
 <button class="btn" id="zenExit" title="Exit full view (Esc)" aria-label="Exit full view">✕ Exit</button>
+
+<div class="modal" id="reviewModal" hidden>
+  <div class="sheet">
+    <div class="shead"><span>🎬 Your take</span><span class="spacer"></span>
+      <button class="btn" id="reviewClose" aria-label="Close">✕</button></div>
+    <div class="sbody">
+      <video id="reviewVid" controls playsinline></video>
+      <p id="reviewMeta"></p>
+      <div class="actions">
+        <button class="btn primary" id="reviewSave">💾 Save (pick a drive)</button>
+        <button class="btn" id="reviewShare" hidden>📤 Share / Save to Photos</button>
+        <button class="btn" id="reviewDrive">☁️ Save to Drive</button>
+        <button class="btn danger" id="reviewDiscard">🗑 Discard</button>
+      </div>
+      <p class="hint" id="reviewHint"></p>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="driveModal" hidden>
+  <div class="sheet">
+    <div class="shead"><span>☁️ Connect Google Drive</span><span class="spacer"></span>
+      <button class="btn" id="driveClose" aria-label="Close">✕</button></div>
+    <div class="sbody">
+      <p>Loading your own files from Google Drive needs a free, one-time Google setup. It takes about
+      five minutes and you only do it once — the keys are stored on this device, never sent anywhere but Google.</p>
+      <p><b>1.</b> Go to <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a>,
+      create a project, and enable the <b>Google Drive API</b> and the <b>Google Picker API</b>.</p>
+      <p><b>2.</b> Under <i>APIs &amp; Services → Credentials</i>, create an <b>API key</b> and an
+      <b>OAuth 2.0 Client ID</b> (type: Web application). Add this page's address to the client's
+      <i>Authorized JavaScript origins</i> (for this build: <code id="driveOrigin"></code>).</p>
+      <p><b>3.</b> Paste both below:</p>
+      <label class="hint">OAuth Client ID</label>
+      <input type="text" id="driveClientId" placeholder="xxxxxxxx.apps.googleusercontent.com">
+      <label class="hint">API key</label>
+      <input type="text" id="driveApiKey" placeholder="AIza…">
+      <div class="actions" style="margin-top:12px">
+        <button class="btn primary" id="driveSaveKeys">Save &amp; connect</button>
+        <button class="btn danger" id="driveForget">Forget keys</button>
+      </div>
+      <p class="hint">Scope used is <code>drive.file</code> — the app only ever touches files you pick or create with it.</p>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -414,8 +559,15 @@ var S = {
   bg:'#000000', fg:'#ffffff', accent:'#ff4d4d', showRead:true, fade:true,
   speed:60, autoScroll:false, mirrorX:false, mirrorY:false, loop:false, markers:true, wake:true,
   before:3, after:5, beep:true,
-  voiceMode:'follow', lang:'en-US', ease:12, highlight:true
+  voiceMode:'follow', lang:'en-US', ease:12, highlight:true,
+  camQuality:'1080', scrim:38, mirrorPrev:true, grid:false, autoRoll:true, micRec:true, camId:''
 };
+/* Google Drive keys live only on this device. Fill DRIVE_CONFIG here to ship a
+   build where Drive works out of the box, or leave blank and paste the keys
+   once through the in-app setup — either way they are stored in localStorage
+   and sent nowhere but Google. */
+var DRIVE_CONFIG = { clientId:'', apiKey:'' };
+var LS_DRIVE = 'tp.drive.v1';
 var FONTS = {
   sans:'ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
   serif:'Georgia, "Times New Roman", ui-serif, serif',
@@ -434,9 +586,20 @@ var pos = 0, maxPos = 0, playing = false, ptr = 0, voiceTarget = -1;
 var elapsed = 0, lastT = 0, raf = 0, wakeLock = null, rec = null, voiceOn = false;
 var countdownTimer = null, finished = false, lastMarker = -1;
 
+/* camera + recording */
+var camStream = null, camOn = false, camFacing = 'user';
+var mediaRec = null, recChunks = [], recording = false, recPaused = false;
+var recStartAt = 0, recPausedMs = 0, recPauseAt = 0, recTimer = null, recMime = '';
+var lastBlob = null, lastBlobUrl = null;
+var audioCtxM = null, meterRaf = 0, meterAnalyser = null;
+
+/* google drive */
+var driveToken = null, driveTokenClient = null, pickerReady = false, gisReady = false, gapiReady = false;
+
 /* ------------------------------------------------------------ DOM handles */
 var viewport=$('viewport'), flip=$('flip'), track=$('track'), scriptEl=$('script'),
-    overlay=$('overlay'), ovNum=$('ovNum'), ovLabel=$('ovLabel'), editor=$('editor');
+    overlay=$('overlay'), ovNum=$('ovNum'), ovLabel=$('ovLabel'), editor=$('editor'),
+    camEl=$('cam');
 
 /* --------------------------------------------------------------- utilities */
 function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
@@ -547,6 +710,10 @@ function applyStyle(){
   flip.style.transform = 'scale(' + (S.mirrorX?-1:1) + ',' + (S.mirrorY?-1:1) + ')';
   $('readline').style.display = S.showRead ? '' : 'none';
   $('fadeT').style.display = $('fadeB').style.display = S.fade ? '' : 'none';
+  /* camera surface */
+  r.setProperty('--scrim', (S.scrim / 100));
+  document.body.classList.toggle('grid', S.grid);
+  if (camEl) camEl.style.transform = S.mirrorPrev ? 'scaleX(-1)' : 'none';
   measure();
 }
 
@@ -823,28 +990,359 @@ document.addEventListener('visibilitychange', function(){
   if (document.visibilityState === 'visible' && playing) requestWake();
 });
 
+/* ------------------------------------------------------------ camera */
+/* The live camera is a reading surface behind the words: you look straight
+   down the lens while the script floats on the glass. MediaRecorder captures
+   the raw camera stream only, so the on-screen text is never in your footage.
+   Nothing here leaves the device. */
+function camSupported(){ return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia); }
+function qualityConstraint(){
+  var q = { '720':{w:1280,h:720}, '1080':{w:1920,h:1080}, '2160':{w:3840,h:2160} }[S.camQuality] || {w:1920,h:1080};
+  return { width:{ ideal:q.w }, height:{ ideal:q.h } };
+}
+function stopCamStream(){
+  if (camStream){ camStream.getTracks().forEach(function(t){ try{ t.stop(); }catch(e){} }); camStream = null; }
+}
+function startCam(){
+  if (!camSupported()){ toast('This browser can’t open the camera.'); return; }
+  stopMeter(); stopCamStream();
+  var vq = qualityConstraint();
+  /* An explicit device wins; otherwise ask for the front/back camera by role,
+     which is how phones expose their lenses. */
+  var video = S.camId ? Object.assign({ deviceId:{ exact:S.camId } }, vq)
+                      : Object.assign({ facingMode:camFacing }, vq);
+  navigator.mediaDevices.getUserMedia({ video:video, audio:S.micRec }).then(function(stream){
+    camStream = stream; camEl.srcObject = stream; camOn = true;
+    camEl.play().catch(function(){});   /* iOS needs an explicit play() even with autoplay */
+    document.body.classList.add('cam');
+    $('btnCam').classList.add('on');
+    $('btnCamToggle').textContent = '📷 Turn camera off';
+    $('btnCamFlip').disabled = false;
+    $('btnRecord').disabled = (typeof MediaRecorder === 'undefined');
+    applyStyle(); populateCameras(); startMeter();
+    toast('Camera on — read down the lens');
+  }).catch(function(e){
+    var name = e && e.name;
+    toast(name === 'NotAllowedError' ? 'Camera blocked — allow access to record.'
+      : name === 'NotFoundError' ? 'No camera found on this device.'
+      : 'Could not open the camera.');
+  });
+}
+function stopCam(){
+  if (recording) stopRec();
+  stopMeter(); stopCamStream();
+  camEl.srcObject = null; camOn = false;
+  document.body.classList.remove('cam');
+  $('btnCam').classList.remove('on');
+  $('btnCamToggle').textContent = '📷 Turn camera on';
+  $('btnCamFlip').disabled = true;
+  $('btnRecord').disabled = true;
+}
+function toggleCam(){ camOn ? stopCam() : startCam(); }
+function flipCam(){
+  camFacing = (camFacing === 'user') ? 'environment' : 'user';
+  S.camId = ''; $('sCamDevice').value = ''; saveSettings();
+  if (camOn) startCam();
+}
+function populateCameras(){
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  navigator.mediaDevices.enumerateDevices().then(function(ds){
+    var sel = $('sCamDevice');
+    var cams = ds.filter(function(d){ return d.kind === 'videoinput'; });
+    sel.innerHTML = '';
+    var def = document.createElement('option'); def.value = ''; def.textContent = 'Default / auto'; sel.appendChild(def);
+    cams.forEach(function(d, i){
+      var o = document.createElement('option'); o.value = d.deviceId;
+      o.textContent = d.label || ('Camera ' + (i + 1)); sel.appendChild(o);
+    });
+    sel.value = S.camId || '';
+  }).catch(function(){});
+}
+/* Live mic level — reassurance that audio is actually being captured. */
+function startMeter(){
+  stopMeter();
+  if (!camStream || !S.micRec || !camStream.getAudioTracks().length) return;
+  try{
+    audioCtxM = audioCtxM || new (window.AudioContext || window.webkitAudioContext)();
+    var src = audioCtxM.createMediaStreamSource(camStream);
+    meterAnalyser = audioCtxM.createAnalyser(); meterAnalyser.fftSize = 512;
+    src.connect(meterAnalyser);
+    var data = new Uint8Array(meterAnalyser.frequencyBinCount);
+    (function loop(){
+      meterRaf = requestAnimationFrame(loop);
+      meterAnalyser.getByteTimeDomainData(data);
+      var peak = 0;
+      for (var i = 0; i < data.length; i++){ var v = Math.abs(data[i] - 128); if (v > peak) peak = v; }
+      $('meterBar').style.width = Math.min(100, (peak / 128) * 180) + '%';
+    })();
+  }catch(e){}
+}
+function stopMeter(){ if (meterRaf){ cancelAnimationFrame(meterRaf); meterRaf = 0; } var b = $('meterBar'); if (b) b.style.width = '0'; }
+
+/* ------------------------------------------------------------ recording */
+var recLastMs = 0;
+function pickMime(){
+  if (typeof MediaRecorder === 'undefined') return '';
+  /* Prefer mp4 so the file plays anywhere (iOS gives mp4); fall back to webm. */
+  var cands = ['video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+  for (var i = 0; i < cands.length; i++){ try{ if (MediaRecorder.isTypeSupported(cands[i])) return cands[i]; }catch(e){} }
+  return '';
+}
+function recElapsedMs(){ return recording ? (performance.now() - recStartAt) : recLastMs; }
+function updateRecTime(){ $('recTime').textContent = fmt(recElapsedMs() / 1000); }
+function startRec(){
+  if (!camOn){ startCam(); toast('Turning the camera on first — tap Record again'); return; }
+  if (!camStream || recording) return;
+  if (typeof MediaRecorder === 'undefined'){ toast('This browser can’t record video — try Chrome, Edge or Safari.'); return; }
+  recMime = pickMime();
+  var begin = function(){
+    try{
+      mediaRec = recMime ? new MediaRecorder(camStream, { mimeType:recMime }) : new MediaRecorder(camStream);
+    }catch(e){
+      try{ mediaRec = new MediaRecorder(camStream); recMime = ''; }
+      catch(e2){ toast('Recording isn’t supported here.'); return; }
+    }
+    recChunks = [];
+    mediaRec.ondataavailable = function(e){ if (e.data && e.data.size) recChunks.push(e.data); };
+    mediaRec.onstop = finishRec;
+    mediaRec.start();
+    recording = true; recStartAt = performance.now();
+    document.body.classList.add('rec');
+    $('btnRecord').classList.add('on'); $('btnRecord').textContent = '⏹ Stop';
+    recTimer = setInterval(updateRecTime, 250); updateRecTime();
+    requestWake();
+    if (S.autoRoll) start();   // scroll now (countdown, if any, already ran below)
+  };
+  /* One-tap: Record runs the lead-in countdown, then rolls scroll + capture
+     together. Independent mode just starts capturing and leaves the scroll to you. */
+  if (S.autoRoll && S.before > 0 && pos < 1){ resetTop(); runCountdown(S.before, 'Get ready', begin); }
+  else begin();
+}
+function stopRec(){
+  if (!recording || !mediaRec) return;
+  recLastMs = performance.now() - recStartAt;
+  try{ mediaRec.stop(); }catch(e){}
+  recording = false;
+  clearInterval(recTimer); recTimer = null;
+  document.body.classList.remove('rec');
+  $('btnRecord').classList.remove('on'); $('btnRecord').textContent = '⏺ Record';
+  if (S.autoRoll && playing) pause();
+}
+function finishRec(){
+  if (!recChunks.length) return;
+  var type = recMime || (recChunks[0] && recChunks[0].type) || 'video/webm';
+  lastBlob = new Blob(recChunks, { type:type }); recChunks = [];
+  openReview();
+}
+function scriptBaseName(){
+  var first = (text.trim().split(/\r?\n/)[0] || 'take').replace(/^#+\s*/, '').replace(/[^\w\- ]+/g, '').trim().slice(0, 40);
+  return (first || 'take');
+}
+function recExt(){ return (lastBlob && lastBlob.type.indexOf('mp4') >= 0) ? 'mp4' : 'webm'; }
+function recFilename(){
+  var d = new Date(), p = function(n){ return (n < 10 ? '0' : '') + n; };
+  return scriptBaseName().replace(/\s+/g, '-') + '-' +
+    d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + '.' + recExt();
+}
+function openReview(){
+  if (!lastBlob) return;
+  if (lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
+  lastBlobUrl = URL.createObjectURL(lastBlob);
+  $('reviewVid').src = lastBlobUrl;
+  $('reviewMeta').textContent = 'Clip ' + fmt(recLastMs / 1000) + ' · ' + (lastBlob.size / 1048576).toFixed(1) + ' MB · ' + recExt().toUpperCase();
+  var canShare = false;
+  try{ canShare = !!(navigator.canShare && navigator.canShare({ files:[new File([lastBlob], 'take.' + recExt(), { type:lastBlob.type })] })); }catch(e){}
+  $('reviewShare').hidden = !canShare;
+  var canPick = typeof window.showSaveFilePicker === 'function';
+  $('reviewHint').textContent = (canPick
+      ? 'Save opens a location picker — choose an external SSD/USB drive or any folder. '
+      : 'Save downloads the file to this device. ')
+    + (canShare ? 'Share → Save Video drops it in your camera roll, or Save to Files reaches a plugged-in drive.' : 'Everything stays local unless you pick Drive.');
+  $('reviewModal').hidden = false;
+}
+function closeReview(){ $('reviewModal').hidden = true; }
+/* Save to a location you choose. Where the File System Access API exists
+   (desktop Chrome/Edge) this opens a native Save dialog, so you can write the
+   take straight to an external SSD or USB drive. Everywhere else it downloads;
+   on a phone the Share sheet (below) reaches Files, iCloud and a plugged-in drive. */
+function downloadBlob(blob, filename){
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a'); a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+  toast('Saved to downloads');
+}
+function saveBlobTo(blob, filename){
+  if (typeof window.showSaveFilePicker === 'function'){
+    var ext = (filename.split('.').pop() || 'bin');
+    var accept = {}; accept[blob.type || 'application/octet-stream'] = ['.' + ext];
+    window.showSaveFilePicker({ suggestedName:filename, types:[{ description:'File', accept:accept }] })
+      .then(function(h){ return h.createWritable(); })
+      .then(function(w){ return Promise.resolve(w.write(blob)).then(function(){ return w.close(); }); })
+      .then(function(){ toast('Saved'); })
+      .catch(function(e){ if (!e || e.name !== 'AbortError') downloadBlob(blob, filename); });
+    return;
+  }
+  downloadBlob(blob, filename);
+}
+function saveRecording(){ if (lastBlob) saveBlobTo(lastBlob, recFilename()); }
+function shareRecording(){
+  if (!lastBlob) return;
+  var file = new File([lastBlob], recFilename(), { type:lastBlob.type });
+  if (navigator.canShare && navigator.canShare({ files:[file] })){
+    navigator.share({ files:[file], title:'Teleprompter take' }).catch(function(){});
+  } else saveRecording();
+}
+function discardRecording(){
+  if (lastBlobUrl){ URL.revokeObjectURL(lastBlobUrl); lastBlobUrl = null; }
+  lastBlob = null; $('reviewVid').removeAttribute('src'); closeReview(); toast('Discarded');
+}
+
+/* ------------------------------------------------------------ google drive */
+/* Optional. Keys are stored only on this device and used only to talk to
+   Google. The drive.file scope means the app can touch nothing but the files
+   you pick or that it creates. The Google SDKs load on demand, on first use. */
+function driveCfg(){
+  var cfg = { clientId:DRIVE_CONFIG.clientId, apiKey:DRIVE_CONFIG.apiKey };
+  try{ var o = JSON.parse(localStorage.getItem(LS_DRIVE) || '{}'); if (o.clientId) cfg.clientId = o.clientId; if (o.apiKey) cfg.apiKey = o.apiKey; }catch(e){}
+  return cfg;
+}
+function driveConfigured(){ var c = driveCfg(); return !!(c.clientId && c.apiKey); }
+function loadExt(src){
+  return new Promise(function(res, rej){
+    var el = document.querySelector('script[data-ext="' + src + '"]');
+    if (el){ if (el.dataset.loaded) res(); else { el.addEventListener('load', function(){ res(); }); el.addEventListener('error', rej); } return; }
+    var s = document.createElement('script'); s.src = src; s.async = true; s.dataset.ext = src;
+    s.onload = function(){ s.dataset.loaded = '1'; res(); }; s.onerror = function(){ rej(new Error('load ' + src)); };
+    document.head.appendChild(s);
+  });
+}
+function ensureGis(){ return window.google && google.accounts && google.accounts.oauth2 ? Promise.resolve() : loadExt('https://accounts.google.com/gsi/client'); }
+function ensurePicker(){
+  if (pickerReady) return Promise.resolve();
+  return loadExt('https://apis.google.com/js/api.js').then(function(){
+    return new Promise(function(res){ gapi.load('client:picker', function(){ pickerReady = true; res(); }); });
+  });
+}
+function driveAuth(){
+  var c = driveCfg();
+  return ensureGis().then(function(){
+    return new Promise(function(res, rej){
+      if (!driveTokenClient){
+        driveTokenClient = google.accounts.oauth2.initTokenClient({
+          client_id:c.clientId, scope:'https://www.googleapis.com/auth/drive.file', callback:function(){}
+        });
+      }
+      driveTokenClient.callback = function(resp){
+        if (resp && resp.access_token){ driveToken = resp.access_token; res(driveToken); }
+        else rej(resp && resp.error || 'auth');
+      };
+      driveTokenClient.error_callback = function(err){ rej(err); };
+      driveTokenClient.requestAccessToken({ prompt: driveToken ? '' : '' });
+    });
+  });
+}
+function driveOpen(){
+  if (!driveConfigured()){ openDriveSetup(); return; }
+  driveAuth().then(function(token){
+    return ensurePicker().then(function(){ showPicker(token); });
+  }).catch(function(){ toast('Drive sign-in canceled.'); });
+}
+function showPicker(token){
+  var c = driveCfg();
+  var view = new google.picker.DocsView(google.picker.ViewId.DOCS)
+    .setMimeTypes('text/plain,text/markdown,application/vnd.google-apps.document,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/html,application/rtf')
+    .setIncludeFolders(true).setSelectFolderEnabled(false);
+  new google.picker.PickerBuilder()
+    .addView(view).setOAuthToken(token).setDeveloperKey(c.apiKey)
+    .setCallback(function(data){
+      if (data.action === google.picker.Action.PICKED){ var d = data.docs[0]; fetchDriveFile(d.id, d.mimeType, d.name); }
+    }).build().setVisible(true);
+}
+function fetchDriveFile(id, mime, name){
+  toast('Loading “' + name + '” from Drive…');
+  var isGDoc = mime === 'application/vnd.google-apps.document';
+  var isDocx = /wordprocessingml\.document/.test(mime) || /\.docx$/i.test(name || '');
+  var url = isGDoc
+    ? 'https://www.googleapis.com/drive/v3/files/' + id + '/export?mimeType=text/plain'
+    : 'https://www.googleapis.com/drive/v3/files/' + id + '?alt=media';
+  fetch(url, { headers:{ Authorization:'Bearer ' + driveToken } })
+    .then(function(r){ if (!r.ok) throw new Error(r.status); return isDocx ? r.arrayBuffer() : r.text(); })
+    .then(function(body){
+      if (isDocx) return readDocx(body);
+      var s = String(body);
+      if (/\.html?$/i.test(name || '')) s = stripHtml(s);
+      else if (/\.rtf$/i.test(name || '')) s = stripRtf(s);
+      else if (/\.(srt|vtt)$/i.test(name || '')) s = stripSubs(s);
+      return s;
+    })
+    .then(function(t){ setText(t); toast('Loaded “' + name + '”'); })
+    .catch(function(){ toast('Could not load that file from Drive.'); });
+}
+function driveSaveScript(){
+  if (!driveConfigured()){ openDriveSetup(); return; }
+  if (!text.trim()){ toast('Nothing to save yet.'); return; }
+  var name = prompt('Save to Drive as:', scriptBaseName() + '.txt');
+  if (!name) return;
+  driveAuth().then(function(){
+    var b = '----tp' + Date.now();
+    var body = '--' + b + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' +
+      JSON.stringify({ name:name, mimeType:'text/plain' }) +
+      '\r\n--' + b + '\r\nContent-Type: text/plain\r\n\r\n' + text + '\r\n--' + b + '--';
+    return fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+      method:'POST', headers:{ Authorization:'Bearer ' + driveToken, 'Content-Type':'multipart/related; boundary=' + b }, body:body
+    });
+  }).then(function(r){ if (!r.ok) throw 0; toast('Saved to Drive'); }).catch(function(){ toast('Could not save to Drive.'); });
+}
+function driveSaveRecording(){
+  if (!lastBlob) return;
+  if (!driveConfigured()){ openDriveSetup(); return; }
+  driveAuth().then(function(){
+    var form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify({ name:recFilename(), mimeType:lastBlob.type })], { type:'application/json' }));
+    form.append('file', lastBlob);
+    toast('Uploading to Drive…');
+    return fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+      method:'POST', headers:{ Authorization:'Bearer ' + driveToken }, body:form
+    });
+  }).then(function(r){ if (!r.ok) throw 0; toast('Recording saved to Drive'); }).catch(function(){ toast('Could not upload to Drive.'); });
+}
+function openDriveSetup(){
+  $('driveOrigin').textContent = location.origin + location.pathname.replace(/[^/]*$/, '');
+  var c = driveCfg();
+  $('driveClientId').value = c.clientId || ''; $('driveApiKey').value = c.apiKey || '';
+  $('driveModal').hidden = false;
+}
+
 /* ------------------------------------------------------- voice activation */
 var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 /* file:// pages have no persistable origin, so Chrome cannot remember a
    microphone grant and re-asks on every recognition start. */
 var IS_FILE = location.protocol === 'file:', fileRestarts = 0;
+/* iPadOS reports as "Mac" but has a touch screen, so test both. */
+var IS_IOS = /iP(hone|od|ad)/.test(navigator.platform || '') ||
+             (/Mac/.test(navigator.platform || '') && navigator.maxTouchPoints > 1);
+var IS_STANDALONE = (window.navigator.standalone === true) ||
+             (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+var lastHeardAt = 0, voiceWatchdog = 0;
 function toggleVoice(){ voiceOn ? stopVoice() : startVoice(); }
 function startVoice(){
-  if (!SR){ toast('This browser has no speech recognition — try Chrome or Edge.'); return; }
+  if (!SR){ toast('This browser has no speech recognition — try Chrome, Edge, or Safari 14.5+.'); return; }
   try{
     rec = new SR();
-    /* Ask for several guesses, not one. Chrome's top transcription is often
-       wrong where a lower-ranked alternative matches the script word for word,
-       so followSpeech aligns against whichever alternative fits best. */
+    /* Ask for several guesses, not one. The top transcription is often wrong
+       where a lower-ranked alternative matches the script word for word, so
+       followSpeech aligns against whichever alternative fits best. */
     rec.continuous = true; rec.interimResults = true; rec.lang = S.lang; rec.maxAlternatives = 5;
-    rec.onresult = onResult;
+    rec.onresult = function(ev){ lastHeardAt = performance.now(); onResult(ev); };
     rec.onerror = function(e){
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed'){
         toast('Microphone blocked — allow mic access to use voice.'); stopVoice();
       }
     };
-    /* Chrome ends the session after a lull. Restart at once and retry, or the
-       first words spoken into that gap — often a command — are simply lost. */
+    /* The engine ends the session after a lull — and Safari ends it after almost
+       every phrase. Restart at once and retry, or the first words spoken into
+       that gap — often a command — are simply lost. */
     rec.onend = function(){
       if (!voiceOn) return;
       /* On file:// each restart raises another permission prompt, so stop
@@ -861,14 +1359,24 @@ function startVoice(){
       })();
     };
     rec.start();
-    voiceOn = true; fileRestarts = 0;
+    voiceOn = true; fileRestarts = 0; lastHeardAt = performance.now();
+    /* Watchdog: iOS can go quiet without ever firing onend, which looks like the
+       script freezing. If nothing is heard for a while, kick the recogniser. */
+    clearInterval(voiceWatchdog);
+    voiceWatchdog = setInterval(function(){
+      if (!voiceOn || !rec) return;
+      if (performance.now() - lastHeardAt > 6500){ lastHeardAt = performance.now(); try{ rec.stop(); }catch(e){} }
+    }, 2500);
     $('btnVoice').classList.add('on');
     toast(S.voiceMode === 'commands' ? 'Listening for commands' : 'Voice tracking on — start reading');
+    if (IS_IOS && camOn && S.micRec && S.voiceMode !== 'commands')
+      toast('On iPhone/iPad the mic can serve voice OR the recording — not both reliably.');
     if (S.voiceMode !== 'commands' && !playing) play();
   }catch(e){ toast('Could not start the microphone.'); }
 }
 function stopVoice(){
   voiceOn = false; voiceTarget = -1;
+  clearInterval(voiceWatchdog); voiceWatchdog = 0;
   $('btnVoice').classList.remove('on');
   $('heard').textContent = '';
   if (rec){ try{ rec.onend = null; rec.stop(); }catch(e){} rec = null; }
@@ -1203,6 +1711,11 @@ function syncUI(){
   $('sLoop').checked = S.loop; $('sMarkers').checked = S.markers; $('sWake').checked = S.wake;
   $('sBeep').checked = S.beep; $('sHighlight').checked = S.highlight;
   $('sVoiceMode').value = S.voiceMode; $('sLang').value = S.lang;
+  $('sCamQuality').value = S.camQuality;
+  $('sScrim').value = S.scrim; $('vScrim').textContent = S.scrim + '%';
+  $('sMirrorPrev').checked = S.mirrorPrev; $('sGrid').checked = S.grid;
+  $('sAutoRoll').checked = S.autoRoll; $('sMicRec').checked = S.micRec;
+  $('sCamDevice').value = S.camId || '';
   [].forEach.call($('sAlign').children, function(b){ b.classList.toggle('on', b.dataset.v === S.align); });
   $('sMirror').children[0].classList.toggle('on', S.mirrorX);
   $('sMirror').children[1].classList.toggle('on', S.mirrorY);
@@ -1267,6 +1780,48 @@ function wireUI(){
   $('btnReset').onclick = resetTop;
   $('btnVoice').onclick = toggleVoice;
   $('btnMirror').onclick = function(){ S.mirrorX = !S.mirrorX; applyStyle(); syncUI(); saveSettings(); broadcast(true); };
+
+  /* camera + recording */
+  $('btnCam').onclick = toggleCam;
+  $('btnCamToggle').onclick = toggleCam;
+  $('btnCamFlip').onclick = flipCam;
+  $('btnRecord').onclick = function(){ recording ? stopRec() : startRec(); };
+  $('sCamDevice').onchange = function(){ S.camId = this.value; saveSettings(); if (camOn) startCam(); };
+  $('sCamQuality').onchange = function(){ S.camQuality = this.value; saveSettings(); if (camOn) startCam(); };
+  bindRange('sScrim','scrim','vScrim', function(v){ return v + '%'; });
+  bindCheck('sMirrorPrev','mirrorPrev');
+  bindCheck('sGrid','grid');
+  bindCheck('sAutoRoll','autoRoll');
+  bindCheck('sMicRec','micRec', function(){ if (camOn) startCam(); });
+
+  /* review modal */
+  $('reviewClose').onclick = closeReview;
+  $('reviewSave').onclick = saveRecording;
+  $('reviewShare').onclick = shareRecording;
+  $('reviewDrive').onclick = driveSaveRecording;
+  $('reviewDiscard').onclick = discardRecording;
+
+  /* google drive */
+  /* Keyless: the OS file picker shows Google Drive as a location on phone/tablet
+     (and on desktop with Drive for Desktop) — no OAuth, nothing to sign into. */
+  $('btnDriveOpen').onclick = function(){ $('file').click(); toast('Choose Google Drive in the file browser'); };
+  $('btnDrivePicker').onclick = driveOpen;   /* in-app OAuth Picker (optional) */
+  $('btnDriveSave').onclick = driveSaveScript;
+  $('driveSetup').onclick = function(e){ e.preventDefault(); openDriveSetup(); };
+  $('driveClose').onclick = function(){ $('driveModal').hidden = true; };
+  $('driveSaveKeys').onclick = function(){
+    var id = $('driveClientId').value.trim(), key = $('driveApiKey').value.trim();
+    if (!id || !key){ toast('Paste both the Client ID and the API key.'); return; }
+    try{ localStorage.setItem(LS_DRIVE, JSON.stringify({ clientId:id, apiKey:key })); }catch(e){}
+    driveToken = null; driveTokenClient = null;
+    $('driveModal').hidden = true;
+    toast('Drive connected — opening your files…'); driveOpen();
+  };
+  $('driveForget').onclick = function(){
+    try{ localStorage.removeItem(LS_DRIVE); }catch(e){}
+    driveToken = null; driveTokenClient = null;
+    $('driveClientId').value = ''; $('driveApiKey').value = ''; toast('Drive keys removed from this device.');
+  };
   function setPanel(open){ $('panel').hidden = !open; $('btnPanel').classList.toggle('on', open); setTimeout(measure, 0); }
   $('btnPanel').onclick = function(){ setPanel($('panel').hidden); };
   $('btnPanelClose').onclick = function(){ setPanel(false); };
@@ -1311,11 +1866,7 @@ function wireUI(){
   };
   $('btnExport').onclick = function(){
     var blob = new Blob([text], { type:'text/plain' });
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = ((text.trim().split(/\r?\n/)[0] || 'script').replace(/[^\w\- ]+/g,'').slice(0,40) || 'script') + '.txt';
-    a.click();
-    setTimeout(function(){ URL.revokeObjectURL(a.href); }, 2000);
+    saveBlobTo(blob, (scriptBaseName().replace(/\s+/g,'-') || 'script') + '.txt');
   };
 
   var editTimer;
@@ -1370,6 +1921,8 @@ document.addEventListener('keydown', function(e){
     return;
   }
   if (e.key === 'Escape'){
+    if (!$('reviewModal').hidden){ closeReview(); return; }
+    if (!$('driveModal').hidden){ $('driveModal').hidden = true; return; }
     if (document.body.classList.contains('zen')){ document.body.classList.remove('zen'); measure(); return; }
     if (!$('panel').hidden){ $('btnPanelClose').click(); return; }
     if (!$('editorWrap').hidden){ $('editorWrap').hidden = true; $('btnEdit').classList.remove('on'); measure(); return; }
@@ -1398,6 +1951,8 @@ document.addEventListener('keydown', function(e){
       else if (l === 'e') $('btnEdit').click();
       else if (l === 's') $('btnPanel').click();
       else if (l === 'r') resetTop();
+      else if (l === 'c') toggleCam();
+      else if (l === 'g'){ if (camOn || !recording) recording ? stopRec() : startRec(); }
       else if (l === 'z'){ document.body.classList.toggle('zen'); setTimeout(measure, 0); }
   }
 });
@@ -1440,8 +1995,21 @@ if (!PRESENT){
   try{ saved = localStorage.getItem(LS_DOC); }catch(e){}
   text = (saved !== null && saved !== '') ? saved : SAMPLE;
   editor.value = text;
-  if (!SR) $('voiceHint').innerHTML = '<b>Heads up:</b> this browser has no speech recognition. Use Chrome or Edge for voice activation — everything else works here.';
+  if (!SR) $('voiceHint').innerHTML = '<b>Heads up:</b> this browser has no speech recognition. Use Chrome, Edge, or Safari 14.5+ for voice activation — everything else works here.';
+  else if (IS_STANDALONE && IS_IOS) $('voiceHint').innerHTML = '<b>Voice in the installed app:</b> iOS sometimes disables speech recognition for home-screen apps. If voice does nothing here, open the page in a normal <b>Safari</b> tab — voice works there. Everything else works either way.';
+  else if (IS_IOS) $('voiceHint').innerHTML = 'Voice works on Safari (iOS 14.5+). Safari stops listening after each phrase, so the app restarts it automatically — small pauses are normal. The mic can serve voice <i>or</i> the camera recording, not both at once, so for a voice-driven take, turn off “Record audio with the video” and capture sound separately.';
   else if (IS_FILE) $('voiceHint').innerHTML = '<b>Opened from a local file.</b> Chrome cannot remember microphone permission for <code>file://</code> pages, so it asks again every time listening restarts. Put the page on GitHub Pages (or run <code>python3 -m http.server</code> and open it via <code>localhost</code>) and it will ask exactly once. Everything else works from a file.';
+  if (!camSupported()){
+    $('btnCam').disabled = true; $('btnCamToggle').disabled = true;
+    $('camHint').innerHTML = '<b>This browser can’t open a camera.</b> Camera recording needs a secure page (https or localhost) and a modern browser — on iPhone/iPad use Safari, on Android use Chrome.';
+  } else if (typeof MediaRecorder === 'undefined'){
+    $('camHint').innerHTML = 'Your camera will show as a reading surface, but this browser can’t record video. For recording, use Safari (iPhone/iPad) or Chrome/Edge.';
+  }
+  if (IS_FILE){
+    /* The keyless "Open from Drive" uses the OS file picker, which works even on
+       file:// — only the in-app Google API path needs https. */
+    $('btnDrivePicker').disabled = $('btnDriveSave').disabled = true;
+  }
 } else {
   document.body.classList.add('present');
 }
