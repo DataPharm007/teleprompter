@@ -1130,11 +1130,80 @@ function stopRec(){
   $('btnRecord').classList.remove('on'); $('btnRecord').textContent = '⏺ Record';
   if (S.autoRoll && playing) pause();
 }
+/* ------------------------------------------------------------ Safari MP4 repair
+   Safari's MediaRecorder sometimes writes one video sample with a duration of
+   0xFFFFFFFF ticks (~83 days at the 600 Hz video timescale) — a -1 stored as
+   unsigned. ffmpeg/desktop players ignore it, but iOS Files and Photos HOLD that
+   frame for the full duration, so the picture freezes while the audio plays on.
+   This scans only the small moof (fragment header) boxes — never the video data
+   — and rewrites each bad 4-byte duration to 1 tick. No re-encode, size
+   unchanged; on any error the original blob is returned untouched.
+   (Fix adapted from github.com/robowers-bit/social-prompter PR #1.) */
+function mp4FourCC(view, o){
+  return String.fromCharCode(view.getUint8(o), view.getUint8(o+1), view.getUint8(o+2), view.getUint8(o+3));
+}
+function collectBadSampleDurations(view, base, bad, out){
+  var end = view.byteLength, p = 8;               // skip the moof header
+  while (p + 8 <= end){
+    var size = view.getUint32(p);
+    if (size < 8) break;
+    if (mp4FourCC(view, p + 4) === 'traf'){
+      var trafEnd = Math.min(end, p + size), q = p + 8;
+      while (q + 8 <= trafEnd){
+        var childSize = view.getUint32(q);
+        if (childSize < 8) break;
+        if (mp4FourCC(view, q + 4) === 'trun'){
+          var flags = view.getUint32(q + 8) & 0xFFFFFF, count = view.getUint32(q + 12), o = q + 16;
+          if (flags & 0x1) o += 4;                // data_offset
+          if (flags & 0x4) o += 4;                // first_sample_flags
+          if (flags & 0x100){                     // per-sample duration present
+            var stride = 4 + ((flags & 0x200) ? 4 : 0) + ((flags & 0x400) ? 4 : 0) + ((flags & 0x800) ? 4 : 0);
+            for (var i = 0; i < count && o + 4 <= trafEnd; i++, o += stride){
+              if (view.getUint32(o) === bad) out.push(base + o);
+            }
+          }
+        }
+        q += childSize;
+      }
+    }
+    p += size;
+  }
+}
+function repairSafariMp4(blob){
+  var BAD = 0xFFFFFFFF, offsets = [], total = blob.size, pos = 0;
+  function step(){
+    if (pos + 8 > total) return Promise.resolve();
+    return blob.slice(pos, pos + 16).arrayBuffer().then(function(buf){
+      var head = new DataView(buf);
+      if (head.byteLength < 8) return;
+      var boxSize = head.getUint32(0), type = mp4FourCC(head, 4), headerSize = 8;
+      if (boxSize === 1 && head.byteLength >= 16){ boxSize = Number(head.getBigUint64(8)); headerSize = 16; }
+      else if (boxSize === 0) boxSize = total - pos;
+      if (boxSize < headerSize) return;
+      var here = pos; pos += boxSize;
+      if (type === 'moof'){
+        return blob.slice(here, here + boxSize).arrayBuffer().then(function(mbuf){
+          collectBadSampleDurations(new DataView(mbuf), here, BAD, offsets); return step();
+        });
+      }
+      return step();
+    });
+  }
+  return step().then(function(){
+    if (!offsets.length) return blob;
+    var oneTick = new Uint8Array([0, 0, 0, 1]), parts = [], last = 0;
+    offsets.forEach(function(off){ parts.push(blob.slice(last, off), oneTick); last = off + 4; });
+    parts.push(blob.slice(last));
+    return new Blob(parts, { type: blob.type });
+  }).catch(function(){ return blob; });
+}
 function finishRec(){
   if (!recChunks.length) return;
   var type = recMime || (recChunks[0] && recChunks[0].type) || 'video/webm';
-  lastBlob = new Blob(recChunks, { type:type }); recChunks = [];
-  openReview();
+  var blob = new Blob(recChunks, { type:type }); recChunks = [];
+  if (type.indexOf('mp4') >= 0 && typeof blob.arrayBuffer === 'function'){
+    repairSafariMp4(blob).then(function(fixed){ lastBlob = fixed; openReview(); });
+  } else { lastBlob = blob; openReview(); }
 }
 function scriptBaseName(){
   var first = (text.trim().split(/\r?\n/)[0] || 'take').replace(/^#+\s*/, '').replace(/[^\w\- ]+/g, '').trim().slice(0, 40);
