@@ -911,7 +911,7 @@ function updateStatus(){
 /* ------------------------------------------------------------- transport */
 function play(){
   if (playing) return;
-  if (S.before > 0 && pos < 1){ runCountdown(S.before, 'Get ready', start); }
+  if (S.before > 0 && pos < 1){ runCountdown(S.before, 'Get ready', start, true); }
   else start();
 }
 function start(){
@@ -954,13 +954,21 @@ function resetTop(){
 /* ------------------------------------------------------------- countdown */
 function showOverlay(num, label){ ovNum.textContent = num; ovLabel.textContent = label; overlay.hidden = false; }
 function hideOverlay(){ overlay.hidden = true; }
-function runCountdown(n, label, done){
+/* silentGo: show a silent "GO" on the final beat instead of a beep, and hand off
+   immediately — so a recording can start with zero delay and no beep in the take. */
+function runCountdown(n, label, done, silentGo){
   cancelCountdown();
   var i = n;
   showOverlay(i, label); beep(i === 1 ? 880 : 440);
   countdownTimer = setInterval(function(){
     i--;
-    if (i <= 0){ cancelCountdown(); hideOverlay(); beep(1200); done && done(); return; }
+    if (i <= 0){
+      cancelCountdown();
+      if (silentGo){ showOverlay('GO', ''); setTimeout(hideOverlay, 500); }
+      else { hideOverlay(); beep(1200); }
+      done && done();
+      return;
+    }
     showOverlay(i, label); beep(i === 1 ? 880 : 440);
   }, 1000);
 }
@@ -1098,8 +1106,14 @@ function startRec(){
   if (typeof MediaRecorder === 'undefined'){ toast('This browser can’t record video — try Chrome, Edge or Safari.'); return; }
   recMime = pickMime();
   var begin = function(){
+    /* Bound the bitrate to the resolution. An unbounded encoder can balloon its
+       buffers and memory on a long take; a sane cap keeps a long recording stable
+       and its file size predictable, with no visible quality cost for talking head. */
+    var vbps = { '720':2500000, '1080':5000000, '2160':16000000 }[S.camQuality] || 5000000;
+    var opts = { videoBitsPerSecond:vbps, audioBitsPerSecond:128000 };
+    if (recMime) opts.mimeType = recMime;
     try{
-      mediaRec = recMime ? new MediaRecorder(camStream, { mimeType:recMime }) : new MediaRecorder(camStream);
+      mediaRec = new MediaRecorder(camStream, opts);
     }catch(e){
       try{ mediaRec = new MediaRecorder(camStream); recMime = ''; }
       catch(e2){ toast('Recording isn’t supported here.'); return; }
@@ -1120,12 +1134,11 @@ function startRec(){
     if (S.autoRoll) start();   // scroll now (countdown, if any, already ran below)
   };
   /* One-tap: Record runs the lead-in countdown, then rolls scroll + capture
-     together. Independent mode just starts capturing and leaves the scroll to you.
-     Start capture a beat AFTER the final "go" beep (which lasts ~0.18s) so the
-     beep stays a cue for you but never lands in the take. */
+     together on a silent "GO" — zero delay, and no beep in the take (the 3·2·1
+     beeps land before capture starts). Independent mode just starts capturing. */
   if (S.autoRoll && S.before > 0 && pos < 1){
     resetTop();
-    runCountdown(S.before, 'Get ready', function(){ setTimeout(begin, S.beep ? 350 : 0); });
+    runCountdown(S.before, 'Get ready', begin, true);   /* silent GO, zero delay */
   }
   else begin();
 }
