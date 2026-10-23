@@ -1116,8 +1116,13 @@ function startRec(){
     if (S.autoRoll) start();   // scroll now (countdown, if any, already ran below)
   };
   /* One-tap: Record runs the lead-in countdown, then rolls scroll + capture
-     together. Independent mode just starts capturing and leaves the scroll to you. */
-  if (S.autoRoll && S.before > 0 && pos < 1){ resetTop(); runCountdown(S.before, 'Get ready', begin); }
+     together. Independent mode just starts capturing and leaves the scroll to you.
+     Start capture a beat AFTER the final "go" beep (which lasts ~0.18s) so the
+     beep stays a cue for you but never lands in the take. */
+  if (S.autoRoll && S.before > 0 && pos < 1){
+    resetTop();
+    runCountdown(S.before, 'Get ready', function(){ setTimeout(begin, S.beep ? 350 : 0); });
+  }
   else begin();
 }
 function stopRec(){
