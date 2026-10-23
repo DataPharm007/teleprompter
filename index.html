@@ -1107,7 +1107,11 @@ function startRec(){
     recChunks = [];
     mediaRec.ondataavailable = function(e){ if (e.data && e.data.size) recChunks.push(e.data); };
     mediaRec.onstop = finishRec;
-    mediaRec.start();
+    /* Flush every second rather than buffering the whole take. Without a
+       timeslice, Chrome's muxer can hold video frames waiting on audio and the
+       picture freezes while sound continues (crbug 40454367); the periodic
+       flush forces the queue out and also yields a more robust, seekable file. */
+    mediaRec.start(1000);
     recording = true; recStartAt = performance.now();
     document.body.classList.add('rec');
     $('btnRecord').classList.add('on'); $('btnRecord').textContent = '⏹ Stop';
